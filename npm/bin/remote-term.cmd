@@ -1,2 +1,2 @@
 @echo off
-"%~dp0\remote-term.exe" %*
+"%~dp0\remote-term-binary.exe" %*

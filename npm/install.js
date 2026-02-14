@@ -60,7 +60,7 @@ async function main() {
   const url = getDownloadUrl(binaryName);
   const binDir = path.join(__dirname, "bin");
   const isWindows = process.platform === "win32";
-  const outputName = isWindows ? "remote-term.exe" : "remote-term";
+  const outputName = isWindows ? "remote-term-binary.exe" : "remote-term-binary";
   const outputPath = path.join(binDir, outputName);
 
   console.log(`Downloading remote-term v${VERSION} for ${process.platform}-${process.arch}...`);
