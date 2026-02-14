@@ -1,8 +1,8 @@
 # Claude Code Instructions
 ## Telegram Terminal Bridge Project
 
-**Last Updated:** 2026-02-14
-**Project Version:** 2.0
+**Last Updated:** 2026-02-15
+**Project Version:** 0.1.x
 
 ---
 
@@ -14,7 +14,11 @@ This is a **cross-platform terminal bridge** that enables remote shell access vi
 
 **Code Size:** ~960 lines production, ~1200 lines tests
 
-**Current Status:** Production (Telegram mode), Beta (WebUI mode)
+**Current Status:** Production (Telegram + WebUI modes)
+
+**Distribution:** npm (`npm i -g remote-term`), GitHub Releases, source
+
+**Repository:** https://github.com/jazztong/remote-terminal
 
 ---
 
@@ -36,12 +40,17 @@ This enables 95% code reuse between Telegram and WebUI modes.
 ### File Structure
 
 ```
-├── main.go (285 lines)        - Entry point, config, ANSI cleaning
-├── telegram.go (427 lines)    - Telegram bot, session management
-├── webui.go (604 lines)       - WebSocket server + embedded UI
-├── terminal.go (255 lines)    - PTY management, streaming
-├── standalone.go (59 lines)   - CLI testing mode
-└── *_test.go (1200+ lines)    - Comprehensive test suite
+├── main.go              - Entry point, config, ANSI cleaning, version
+├── telegram.go          - Telegram bot, session management
+├── webui.go             - WebSocket server + embedded UI + auth
+├── terminal.go          - PTY management, streaming
+├── markdown.go          - Markdown-to-Telegram-HTML converter
+├── screenreader.go      - VTE-based terminal screen reader
+├── standalone.go        - CLI testing mode
+├── build.sh             - Cross-platform build script (ldflags)
+├── npm/                 - npm package (install.js, bin stubs)
+├── .github/workflows/   - CI/CD (release.yml)
+└── *_test.go            - Comprehensive test suite (85+ tests)
 ```
 
 ### Key Components
@@ -257,7 +266,7 @@ var interactiveCommands = []string{
 **Testing:**
 ```bash
 # 1. Start bot
-./telegram-terminal
+remote-term
 
 # 2. Send command in Telegram
 > mycli
@@ -296,12 +305,13 @@ func (s *WebUIServer) serveHTML(w http.ResponseWriter, r *http.Request) {
 
 ### Adding Configuration Options
 
-**File:** `main.go:39-43`
+**File:** `main.go`
 
 ```go
 type Config struct {
-    BotToken     string   `json:"bot_token"`
-    AllowedUsers []int64  `json:"allowed_users"`
+    BotToken          string  `json:"bot_token"`
+    AllowedUsers      []int64 `json:"allowed_users"`
+    WebUIPasswordHash string  `json:"webui_password_hash,omitempty"`
 
     // Add new field:
     SessionTimeout int `json:"session_timeout_minutes,omitempty"`
@@ -419,7 +429,7 @@ func main() {
 
 ```bash
 # See raw PTY output
-strace -e read,write -p $(pidof telegram-terminal)
+strace -e read,write -p $(pidof remote-term)
 
 # Check terminal settings
 stty -a < /dev/pts/X  # X = PTY number
@@ -536,47 +546,39 @@ go tool pprof mem.prof
 
 ```bash
 # Development
-go build -o telegram-terminal
+go build -o remote-term .
 
-# Production (smaller binary)
-go build -ldflags="-s -w" -o telegram-terminal
+# Production (smaller binary, with version)
+go build -ldflags="-s -w -X main.version=0.1.3" -o remote-term .
 
-# Cross-compile
-GOOS=linux GOARCH=amd64 go build -o telegram-terminal-linux-amd64
-GOOS=darwin GOARCH=arm64 go build -o telegram-terminal-darwin-arm64
-GOOS=windows GOARCH=amd64 go build -o telegram-terminal-windows-amd64.exe
+# Cross-compile all platforms
+./build.sh 0.1.3
 ```
 
 ### Running
 
 ```bash
 # Telegram mode
-./telegram-terminal
+remote-term
 
 # WebUI mode
-./telegram-terminal --web 8080
+remote-term --web 8080
 
-# Both (separate terminals)
-./telegram-terminal > bot.log 2>&1 &
-./telegram-terminal --web 8080 > webui.log 2>&1 &
+# Check version
+remote-term --version
 ```
 
-### Monitoring
+### CI/CD
+
+Releases are automated via GitHub Actions (`.github/workflows/release.yml`):
 
 ```bash
-# Check process
-ps aux | grep telegram-terminal
-
-# Check logs
-tail -f bot.log
-tail -f webui.log
-
-# Check for zombies
-ps aux | grep defunct
-
-# Resource usage
-top -p $(pidof telegram-terminal)
+# Tag a release → triggers build + npm publish
+git tag v0.1.4
+git push origin v0.1.4
 ```
+
+Pipeline: test → build (matrix) → GitHub Release → npm publish (trusted publishing/OIDC)
 
 ---
 
@@ -587,27 +589,21 @@ top -p $(pidof telegram-terminal)
 **Symptom:** Occasional crash with concurrent messages
 **Workaround:** Don't send rapid messages (< 100ms apart)
 **Fix:** Add mutex (see Critical Code Areas)
-**Status:** Open (v2.1)
+**Status:** Open
 
-### Issue #2: WebUI Auth ✅ RESOLVED
-
-**Symptom:** Anyone on localhost could access (fixed in v2.1)
-**Fix:** Password-based authentication with bcrypt + server-side sessions
-**Status:** Resolved (2026-02-14)
-
-### Issue #3: Windows Process Group Kill
+### Issue #2: Windows Process Group Kill
 
 **Symptom:** Child processes not killed on Windows
 **Workaround:** Use Linux/macOS for production
 **Fix:** Platform-specific code for Windows
-**Status:** Open (v2.2)
+**Status:** Open
 
-### Issue #4: Large Output Truncation
+### Issue #3: Large Output Truncation
 
 **Symptom:** Telegram messages >4000 chars split awkwardly
 **Workaround:** Use WebUI for large outputs
 **Fix:** Word-aware splitting
-**Status:** Open (v2.2)
+**Status:** Open
 
 ---
 
@@ -701,7 +697,7 @@ Closes: #42
 
 1. **Stop the service:**
    ```bash
-   pkill telegram-terminal
+   pkill remote-term
    ```
 
 2. **Check logs:**
@@ -713,15 +709,9 @@ Closes: #42
 3. **Check for zombies:**
    ```bash
    ps aux | grep defunct
-   pkill -9 defunct  # If any
    ```
 
-4. **Restart with debug:**
-   ```bash
-   ./telegram-terminal --debug > debug.log 2>&1
-   ```
-
-5. **Report issue** with logs
+4. **Report issue** at https://github.com/jazztong/remote-terminal/issues
 
 ---
 
@@ -731,7 +721,7 @@ Closes: #42
 
 ```bash
 # Build
-go build -o telegram-terminal
+go build -o remote-term .
 
 # Test
 go test -v
@@ -739,18 +729,12 @@ go test -race
 go test -cover
 
 # Run
-./telegram-terminal                 # Telegram mode
-./telegram-terminal --web 8080      # WebUI mode
+remote-term                 # Telegram mode
+remote-term --web 8080      # WebUI mode
+remote-term --version       # Check version
 
-# Monitor
-tail -f bot.log
-ps aux | grep telegram-terminal
-lsof -i :8080
-
-# Debug
-go tool pprof cpu.prof
-go tool cover -html=coverage.out
-strace -p $(pidof telegram-terminal)
+# Release (triggers CI/CD)
+git tag v0.1.4 && git push origin v0.1.4
 ```
 
 ### File Permissions
@@ -758,12 +742,6 @@ strace -p $(pidof telegram-terminal)
 ```bash
 # Config file
 chmod 600 ~/.telegram-terminal/config.json
-
-# Binary
-chmod +x telegram-terminal
-
-# Logs
-chmod 644 bot.log webui.log
 ```
 
 ### Git Workflow
@@ -801,7 +779,6 @@ git push origin feat/add-authentication
 
 ### Architecture
 
-- [PRD.md](./PRD.md) - Product requirements
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - Technical details
 - [SECURITY.md](./SECURITY.md) - Security considerations
 
@@ -810,8 +787,9 @@ git push origin feat/add-authentication
 ## Contact & Support
 
 **Project Owner:** Jazz Tong
-**Repository:** [GitHub URL]
-**Issues:** [GitHub Issues URL]
+**Repository:** https://github.com/jazztong/remote-terminal
+**Issues:** https://github.com/jazztong/remote-terminal/issues
+**npm:** https://www.npmjs.com/package/remote-term
 **Security:** See SECURITY.md
 
 ---
@@ -820,15 +798,12 @@ git push origin feat/add-authentication
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2.1 | 2026-02-14 | WebUI password authentication, bcrypt, session cookies |
-| 2.0 | 2026-02-14 | Auto-session detection, WebUI mode |
-| 1.0 | 2026-01-XX | Initial release, Telegram bot |
+| 0.1.3 | 2026-02-15 | npm distribution fix (Node.js bin stub) |
+| 0.1.0 | 2026-02-14 | npm package, CI/CD, versioning, WebUI auth |
 
 ---
 
-**Last Updated:** 2026-02-14
-**Claude Code Version Tested:** 0.3.1+
-**Recommended Model:** Claude Sonnet 4.5+
+**Last Updated:** 2026-02-15
 
 ---
 
@@ -859,7 +834,7 @@ git push origin feat/add-authentication
 ### Remember
 
 - This is a **security-sensitive** project (shell access)
-- **WebUI auth implemented** - bcrypt password + session cookies (v2.1)
+- **WebUI auth implemented** - bcrypt password + session cookies
 - **Race condition exists** - Session map needs mutex
 - **Tests are comprehensive** - Use them!
 - **Interface design is key** - Don't break OutputSink
