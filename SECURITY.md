@@ -1,9 +1,9 @@
 # Security Documentation
 ## Telegram Terminal Bridge
 
-**Version:** 2.0
-**Last Updated:** 2026-02-14
-**Security Level:** MEDIUM (Telegram), CRITICAL (WebUI)
+**Version:** 0.1.x
+**Last Updated:** 2026-02-15
+**Security Level:** MEDIUM (Telegram), MEDIUM (WebUI)
 
 ---
 
@@ -655,13 +655,13 @@ ufw allow from 127.0.0.1 to any port 8080
 
 ```bash
 # Check active sessions
-ps aux | grep telegram-terminal
+ps aux | grep remote-term
 
 # Monitor bot.log
 tail -f bot.log | grep "Unauthorized"
 
 # Check for unusual processes
-ps -ef --forest | grep telegram-terminal -A 10
+ps -ef --forest | grep remote-term -A 10
 ```
 
 #### 5. Update Dependencies
@@ -790,17 +790,17 @@ cmd.SysProcAttr = &syscall.SysProcAttr{
 tail -100 bot.log | grep -i "error\|unauthorized\|failed"
 
 # Check running processes
-ps aux | grep telegram-terminal -A 20
+ps aux | grep remote-term -A 20
 
 # Check connections
-lsof -i -P -n | grep telegram-terminal
+lsof -i -P -n | grep remote-term
 ```
 
 #### Step 2: Contain
 
 ```bash
 # Stop the service immediately
-pkill -9 telegram-terminal
+pkill -9 remote-term
 
 # Kill all sessions
 pkill -9 -f "bash --norc"
@@ -836,7 +836,7 @@ jq '.allowed_users' ~/.telegram-terminal/config.json
 rm ~/.telegram-terminal/config.json
 
 # Re-setup with new token
-./telegram-terminal
+remote-term
 > /setup <NEW_TOKEN>
 
 # Review and minimal whitelist
@@ -923,7 +923,7 @@ rm ~/.telegram-terminal/config.json
 
 ## Security Roadmap
 
-### v2.1 (Current Release)
+### Current Release (0.1.x)
 
 **Completed:**
 - [x] **P0:** Add WebUI authentication (bcrypt password + session cookies)
@@ -936,7 +936,7 @@ rm ~/.telegram-terminal/config.json
 
 ---
 
-### v2.2 (Future - HARDENING)
+### Next (HARDENING)
 
 **Should Fix:**
 - [ ] **P2:** Implement cgroups resource limits
@@ -950,7 +950,7 @@ rm ~/.telegram-terminal/config.json
 
 ---
 
-### v3.0 (Long-term - ENTERPRISE)
+### Long-term (ENTERPRISE)
 
 **Nice to Have:**
 - [ ] **P4:** Sandboxing via containers/chroot
@@ -967,8 +967,7 @@ rm ~/.telegram-terminal/config.json
 ## Security Contacts
 
 **Report Vulnerabilities:**
-- Email: [security@example.com]
-- PGP Key: [Not configured]
+- GitHub Issues: https://github.com/jazztong/remote-terminal/issues
 - Response SLA: 48 hours
 
 **Security Updates:**
@@ -981,21 +980,20 @@ rm ~/.telegram-terminal/config.json
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-02-15 | 1.1 | Updated for 0.1.x release, binary rename |
 | 2026-02-14 | 1.0 | Initial security documentation |
-| TBD | 1.1 | Post-v2.1 security fixes |
 
 ---
 
 ## Related Documents
 
-- [PRD.md](./PRD.md) - Product requirements
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - Technical architecture
 - [CLAUDE.md](./CLAUDE.md) - AI assistant guidelines
 - [README.md](./README.md) - User documentation
 
 ---
 
-**Document Version:** 1.0
+**Document Version:** 1.1
 **Classification:** Internal Use
-**Last Reviewed:** 2026-02-14
-**Next Review:** 2026-05-14 (quarterly)
+**Last Reviewed:** 2026-02-15
+**Next Review:** 2026-05-15 (quarterly)

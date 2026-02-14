@@ -1,7 +1,7 @@
 # Architecture Documentation
 ## Telegram Terminal Bridge
 
-**Version:** 2.0
+**Version:** 0.1.x
 **Last Updated:** 2026-02-14
 
 ---
@@ -62,14 +62,15 @@
 
 ### Key Components
 
-| Component | Responsibility | Lines of Code |
-|-----------|---------------|---------------|
-| `main.go` | Entry point, config, ANSI cleaning | 285 |
-| `telegram.go` | Telegram bot, session routing | 427 |
-| `webui.go` | WebSocket server, embedded UI | 604 |
-| `terminal.go` | PTY management, streaming | 255 |
-| `standalone.go` | CLI testing mode | 59 |
-| **Total** | **Production code** | **960** |
+| Component | Responsibility |
+|-----------|---------------|
+| `main.go` | Entry point, config, ANSI cleaning, version |
+| `telegram.go` | Telegram bot, session routing |
+| `webui.go` | WebSocket server, embedded UI, auth |
+| `terminal.go` | PTY management, streaming |
+| `markdown.go` | Markdown-to-Telegram-HTML converter |
+| `screenreader.go` | VTE-based terminal screen reader |
+| `standalone.go` | CLI testing mode |
 
 ### Technology Stack
 
@@ -81,6 +82,8 @@ require (
     github.com/creack/pty v1.1.21           // Cross-platform PTY
     github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
     github.com/gorilla/websocket v1.5.1     // WebSocket for WebUI
+    github.com/charmbracelet/x/vt           // VTE terminal emulation
+    golang.org/x/crypto                     // bcrypt password hashing
     golang.org/x/sys v0.16.0                // System calls
     golang.org/x/term v0.16.0               // Terminal control
 )
@@ -423,9 +426,11 @@ func isInteractiveCommand(cmd string) bool {
 
 ```go
 type WebUIServer struct {
-    port     int
-    sessions map[string]*Session  // sessionID → Session
-    mu       sync.RWMutex          // ✅ Properly protected
+    sessions     map[int64]*Session    // terminal sessions
+    authSessions map[string]time.Time  // auth token → expiry
+    mu           sync.Mutex
+    nextID       int64
+    config       *Config
 }
 
 type WebSocketMessage struct {
@@ -975,33 +980,40 @@ func executeOneShot(chatID int64, command string, sink OutputSink)
 
 ---
 
-### webui.go (604 lines)
+### webui.go
 
-**Structure:**
-- Go code: 261 lines
-- Embedded HTML: 150 lines
-- Embedded CSS: 120 lines
-- Embedded JavaScript: 73 lines
+**Key Data Structure:**
+```go
+type WebUIServer struct {
+    sessions     map[int64]*Session    // terminal sessions
+    authSessions map[string]time.Time  // auth token → expiry
+    mu           sync.Mutex
+    nextID       int64
+    config       *Config
+}
+```
 
 **Exports:**
 ```go
 type WebUIServer struct { ... }
-func NewWebUIServer(port int) *WebUIServer
-func (s *WebUIServer) Start()
+func NewWebUIServer(config *Config) *WebUIServer
+func (s *WebUIServer) Start(port int)
 ```
 
 **Internal:**
 ```go
 func (s *WebUIServer) serveHTML(w http.ResponseWriter, r *http.Request)
 func (s *WebUIServer) handleWebSocket(w http.ResponseWriter, r *http.Request)
-func (s *WebUIServer) startSession(sessionID, command string, ws *websocket.Conn)
+func (s *WebUIServer) handleLogin(w http.ResponseWriter, r *http.Request)
+func (s *WebUIServer) authMiddleware(next http.HandlerFunc) http.HandlerFunc
 ```
 
 **Dependencies:**
 - `gorilla/websocket` - WebSocket server
+- `golang.org/x/crypto/bcrypt` - Password hashing
 - `terminal.go` - PTY management
 
-**Test Coverage:** ~60% (manual testing, no automated WebSocket tests)
+**Test Coverage:** ~85% (including auth tests)
 
 ---
 
@@ -1010,8 +1022,9 @@ func (s *WebUIServer) startSession(sessionID, command string, ws *websocket.Conn
 **Exports:**
 ```go
 type Config struct {
-    BotToken     string
-    AllowedUsers []int64
+    BotToken          string
+    AllowedUsers      []int64
+    WebUIPasswordHash string
 }
 
 func main()
@@ -1093,7 +1106,7 @@ type Terminal interface {
 ### Single Binary Deployment
 
 ```
-telegram-terminal (binary)
+remote-term (binary)
     │
     ├─ Embedded resources:
     │   ├─ HTML template
@@ -1111,16 +1124,13 @@ telegram-terminal (binary)
 
 ```bash
 # Development build
-go build -o telegram-terminal
+go build -o remote-term .
 
-# Production build (optimized)
-go build -ldflags="-s -w" -o telegram-terminal
+# Production build (optimized, with version)
+go build -ldflags="-s -w -X main.version=0.1.3" -o remote-term .
 
 # Cross-compile for all platforms
-GOOS=linux GOARCH=amd64 go build -o telegram-terminal-linux-amd64
-GOOS=darwin GOARCH=amd64 go build -o telegram-terminal-darwin-amd64
-GOOS=darwin GOARCH=arm64 go build -o telegram-terminal-darwin-arm64
-GOOS=windows GOARCH=amd64 go build -o telegram-terminal-windows-amd64.exe
+./build.sh 0.1.3
 ```
 
 **Binary Size:**
@@ -1133,10 +1143,10 @@ GOOS=windows GOARCH=amd64 go build -o telegram-terminal-windows-amd64.exe
 ### Runtime Modes
 
 ```
-./telegram-terminal                    → Telegram bot mode
-./telegram-terminal --web 8080         → WebUI mode
-./telegram-terminal --standalone       → CLI testing mode
-./telegram-terminal --help             → Usage info
+remote-term                    → Telegram bot mode
+remote-term --web 8080         → WebUI mode
+remote-term --standalone       → CLI testing mode
+remote-term --version          → Show version
 ```
 
 **Resource Usage:**
@@ -1233,7 +1243,7 @@ GOOS=windows GOARCH=amd64 go build -o telegram-terminal-windows-amd64.exe
 - ❌ Hard to maintain
 - ❌ No hot reload
 
-**Future:** Consider `embed.FS` + templates for v2.1
+**Future:** Consider `embed.FS` + templates for a future version
 
 ---
 
@@ -1400,13 +1410,12 @@ GOOS=windows GOARCH=amd64 go build -o telegram-terminal-windows-amd64.exe
 
 ## Related Documents
 
-- [PRD.md](./PRD.md) - Product requirements
 - [SECURITY.md](./SECURITY.md) - Security analysis
 - [CLAUDE.md](./CLAUDE.md) - AI assistant guidelines
 - [README.md](./README.md) - User documentation
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2026-02-14
+**Document Version:** 1.1
+**Last Updated:** 2026-02-15
 **Maintainer:** Jazz Tong
