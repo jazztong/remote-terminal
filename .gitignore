@@ -1,0 +1,56 @@
+# Binaries
+remote-terminal
+remote-terminal-*
+telegram-terminal
+telegram-terminal-*
+test-fork
+*.exe
+
+# Config (contains bot token - NEVER commit)
+config.json
+.telegram-terminal/
+
+# Go build artifacts
+*.o
+*.a
+*.so
+coverage.out
+*.prof
+
+# Logs
+*.log
+
+# Screenshots & test artifacts
+*.png
+*.jpg
+*.jpeg
+test-results/
+console*.txt
+
+# IDE & editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Sensitive scripts (may contain tokens)
+send-test-msg.sh
+debug-capture.sh
+
+# Playwright MCP cache
+.playwright-mcp/
+
+# Claude internal
+.claude/
+
+# Internal dev notes (keep source code clean)
+docs/plans/
+
+# Misc artifacts
+hello.html
+live.log
