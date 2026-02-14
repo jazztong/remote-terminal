@@ -3,12 +3,11 @@
 /remote-terminal-*
 /remote-term
 /remote-term-*
-/telegram-terminal
-/telegram-terminal-*
-/test-fork
 *.exe
-!npm/bin/remote-term
 !npm/bin/remote-term.cmd
+
+# npm stub (preserve in repo)
+!npm/bin/remote-term
 
 # Config (contains bot token - NEVER commit)
 config.json
@@ -24,12 +23,8 @@ coverage.out
 # Logs
 *.log
 
-# Screenshots & test artifacts
-*.png
-*.jpg
-*.jpeg
+# Test artifacts
 test-results/
-console*.txt
 
 # IDE & editor
 .vscode/
@@ -42,23 +37,9 @@ console*.txt
 .DS_Store
 Thumbs.db
 
-# Sensitive scripts (may contain tokens)
-send-test-msg.sh
-debug-capture.sh
-
-# Playwright MCP cache
-.playwright-mcp/
-
 # Claude internal
 .claude/
-
-# Internal dev notes (keep design docs, ignore drafts)
-docs/plans/drafts/
 
 # Node
 node_modules/
 *.tgz
-
-# Misc artifacts
-hello.html
-live.log
