@@ -11,29 +11,38 @@ A cross-platform terminal bridge that gives you remote shell access via **Telegr
 - **Single binary** — no runtime dependencies. Build once, run anywhere.
 - **Cross-platform** — Linux, macOS (Intel + Apple Silicon), Windows.
 
+## Install
+
+### npm (recommended)
+
+```bash
+npm i -g remote-term
+```
+
+### From source
+
+Requires Go 1.20+:
+
+```bash
+git clone https://github.com/jazztong/remote-terminal.git
+cd remote-terminal
+go build -o remote-term .
+```
+
+### GitHub Releases
+
+Download pre-built binaries from [Releases](https://github.com/jazztong/remote-terminal/releases).
+
 ## Quick Start
 
 ### Prerequisites
 
-- Go 1.20+ (to build from source)
-- A Telegram bot token (from [@BotFather](https://t.me/botfather))
-
-### Build
-
-```bash
-go build -o remote-terminal .
-```
-
-Or cross-compile for all platforms:
-
-```bash
-./build.sh
-```
+- A Telegram bot token (from [@BotFather](https://t.me/botfather)) — only needed for Telegram mode
 
 ### Run — Telegram Mode
 
 ```bash
-./remote-terminal
+remote-term
 ```
 
 On first run, you'll be prompted to set up your bot:
