@@ -1,12 +1,14 @@
-# Binaries
-remote-terminal
-remote-terminal-*
-remote-term
-remote-term-*
-telegram-terminal
-telegram-terminal-*
-test-fork
+# Binaries (root level only)
+/remote-terminal
+/remote-terminal-*
+/remote-term
+/remote-term-*
+/telegram-terminal
+/telegram-terminal-*
+/test-fork
 *.exe
+!npm/bin/remote-term
+!npm/bin/remote-term.cmd
 
 # Config (contains bot token - NEVER commit)
 config.json

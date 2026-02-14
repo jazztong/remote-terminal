@@ -1,0 +1,22 @@
+#!/usr/bin/env node
+
+const { execFileSync } = require("child_process");
+const path = require("path");
+const fs = require("fs");
+
+const isWindows = process.platform === "win32";
+const binaryName = isWindows ? "remote-term-binary.exe" : "remote-term-binary";
+const binaryPath = path.join(__dirname, binaryName);
+
+if (!fs.existsSync(binaryPath)) {
+  console.error("Error: remote-term binary not found. Try reinstalling: npm i -g remote-term");
+  process.exit(1);
+}
+
+try {
+  const result = execFileSync(binaryPath, process.argv.slice(2), {
+    stdio: "inherit",
+  });
+} catch (err) {
+  process.exit(err.status || 1);
+}
