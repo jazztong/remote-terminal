@@ -1,6 +1,8 @@
 # Binaries
 remote-terminal
 remote-terminal-*
+remote-term
+remote-term-*
 telegram-terminal
 telegram-terminal-*
 test-fork
@@ -48,8 +50,12 @@ debug-capture.sh
 # Claude internal
 .claude/
 
-# Internal dev notes (keep source code clean)
-docs/plans/
+# Internal dev notes (keep design docs, ignore drafts)
+docs/plans/drafts/
+
+# Node
+node_modules/
+*.tgz
 
 # Misc artifacts
 hello.html

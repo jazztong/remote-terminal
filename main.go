@@ -14,12 +14,21 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
+// Version is set at build time via ldflags
+var version = "dev"
+
 type Config struct {
-	BotToken     string  `json:"bot_token"`
-	AllowedUsers []int64 `json:"allowed_users"`
+	BotToken          string  `json:"bot_token"`
+	AllowedUsers      []int64 `json:"allowed_users"`
+	WebUIPasswordHash string  `json:"webui_password_hash,omitempty"`
 }
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("remote-term v%s\n", version)
+		return
+	}
+
 	// Check for standalone mode
 	if len(os.Args) > 1 && os.Args[1] == "--standalone" {
 		RunStandalone()
@@ -32,7 +41,8 @@ func main() {
 		if len(os.Args) > 2 {
 			fmt.Sscanf(os.Args[2], "%d", &port)
 		}
-		server := NewWebUIServer()
+		config, _ := loadConfig() // nil-safe: config may not exist yet for first-time WebUI
+		server := NewWebUIServer(config)
 		server.Start(port)
 		return
 	}
@@ -49,7 +59,15 @@ func main() {
 	}
 }
 
+// configPathOverride allows tests to redirect config to a temp directory
+var configPathOverride string
+
 func getConfigPath() string {
+	if configPathOverride != "" {
+		dir := filepath.Dir(configPathOverride)
+		os.MkdirAll(dir, 0700)
+		return configPathOverride
+	}
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".telegram-terminal")
 	os.MkdirAll(configDir, 0700)
@@ -82,7 +100,7 @@ func generateCode() string {
 }
 
 func setupWithApproval() {
-	fmt.Println("Remote Terminal v2.0")
+	fmt.Printf("Remote Terminal v%s\n", version)
 	fmt.Println("\nRun: /setup <bot-token>")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -196,7 +214,7 @@ func startListening() {
 		return
 	}
 
-	fmt.Println("Remote Terminal v2.0")
+	fmt.Printf("Remote Terminal v%s\n", version)
 	fmt.Printf("✅ Configuration loaded\n")
 	fmt.Printf("👥 Allowed users: %d\n", len(config.AllowedUsers))
 	fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

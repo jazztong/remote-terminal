@@ -55,7 +55,7 @@ Run: /setup <bot-token>
 ./remote-terminal --web 8080
 ```
 
-Open `http://localhost:8080` in your browser. Full terminal emulation via xterm.js.
+Open `http://localhost:8080` in your browser. On first access you'll be prompted to create a password. After that, login is required to access the terminal. Full terminal emulation via xterm.js.
 
 ## Usage
 
@@ -142,22 +142,25 @@ Config is stored at `~/.telegram-terminal/config.json` (created automatically du
 ```json
 {
   "bot_token": "<YOUR_BOT_TOKEN>",
-  "allowed_users": [123456789]
+  "allowed_users": [123456789],
+  "webui_password_hash": "$2a$10$..."
 }
 ```
 
 - **bot_token** — from [@BotFather](https://t.me/botfather)
 - **allowed_users** — Telegram user IDs authorized to send commands. Get yours from [@userinfobot](https://t.me/userinfobot).
+- **webui_password_hash** — bcrypt hash of WebUI password (set automatically on first WebUI access)
 
 File permissions are set to `0600` (owner read/write only).
 
 ## Security
 
-1. **Approval code** — random 5-digit code required on first connection
+1. **Approval code** — random 5-digit code required on first Telegram connection
 2. **User whitelist** — only approved Telegram user IDs can execute commands
-3. **Config permissions** — `0600` on config file containing the bot token
-4. **URL sanitization** — markdown links only allow `http://`, `https://`, and `tg://` protocols
-5. **WebUI** — currently localhost-only, no authentication (use behind a reverse proxy for remote access)
+3. **WebUI authentication** — bcrypt password hashing, server-side sessions with 24h expiry, HttpOnly/SameSite cookies
+4. **Config permissions** — `0600` on config file containing the bot token
+5. **URL sanitization** — markdown links only allow `http://`, `https://`, and `tg://` protocols
+6. **Origin validation** — WebSocket upgrades only accepted from same-origin requests
 
 > **Warning:** This tool provides full shell access to your machine. Only authorize trusted users.
 
@@ -177,7 +180,7 @@ go test -cover
 go test -bench=BenchmarkFormatMarkdown -benchmem
 ```
 
-75+ tests covering terminal management, markdown conversion, WebUI, and end-to-end flows.
+85+ tests covering terminal management, markdown conversion, WebUI authentication, and end-to-end flows.
 
 ## Building for All Platforms
 

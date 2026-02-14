@@ -2,10 +2,17 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // --- WebSocketSink Tests ---
@@ -526,10 +533,10 @@ func TestHTMLXtermWritesRawOutput(t *testing.T) {
 
 // TestNewWebUIServer verifies server initialization
 func TestNewWebUIServer(t *testing.T) {
-	server := NewWebUIServer()
+	server := NewWebUIServer(nil)
 
 	if server == nil {
-		t.Fatal("NewWebUIServer() returned nil")
+		t.Fatal("NewWebUIServer(nil) returned nil")
 	}
 	if server.sessions == nil {
 		t.Error("sessions map not initialized")
@@ -541,7 +548,7 @@ func TestNewWebUIServer(t *testing.T) {
 
 // TestWebUIServerSessionIDIncrement verifies session IDs increment
 func TestWebUIServerSessionIDIncrement(t *testing.T) {
-	server := NewWebUIServer()
+	server := NewWebUIServer(nil)
 
 	// Simulate ID allocation
 	server.mu.Lock()
@@ -561,7 +568,7 @@ func TestWebUIServerSessionIDIncrement(t *testing.T) {
 
 // TestWebUIServerConcurrentSessionAccess verifies mutex protects session map
 func TestWebUIServerConcurrentSessionAccess(t *testing.T) {
-	server := NewWebUIServer()
+	server := NewWebUIServer(nil)
 
 	var wg sync.WaitGroup
 	errors := make(chan error, 100)
@@ -612,7 +619,7 @@ func TestWebUIServerConcurrentSessionAccess(t *testing.T) {
 
 // TestWebUIServerCleanup verifies session cleanup
 func TestWebUIServerCleanup(t *testing.T) {
-	server := NewWebUIServer()
+	server := NewWebUIServer(nil)
 
 	// Create a terminal for the session
 	sink := &MockSink{}
@@ -650,7 +657,7 @@ func TestWebUIServerCleanup(t *testing.T) {
 
 // TestHandleResizeWithActiveSession verifies resize reaches terminal
 func TestHandleResizeWithActiveSession(t *testing.T) {
-	server := NewWebUIServer()
+	server := NewWebUIServer(nil)
 
 	sink := &MockSink{}
 	term, err := NewTerminal(sink)
@@ -706,7 +713,7 @@ drain:
 
 // TestHandleResizeWithNoSession verifies resize is ignored for missing sessions
 func TestHandleResizeWithNoSession(t *testing.T) {
-	server := NewWebUIServer()
+	server := NewWebUIServer(nil)
 
 	// Should not panic
 	msg := WebMessage{Type: "resize", Rows: 30, Cols: 90}
@@ -715,7 +722,7 @@ func TestHandleResizeWithNoSession(t *testing.T) {
 
 // TestHandleResizeWithZeroDimensions verifies zero dimensions are ignored
 func TestHandleResizeWithZeroDimensions(t *testing.T) {
-	server := NewWebUIServer()
+	server := NewWebUIServer(nil)
 
 	sink := &MockSink{}
 	term, err := NewTerminal(sink)
@@ -769,7 +776,7 @@ drain:
 
 // TestHandleRawInputWithActiveSession verifies input reaches terminal
 func TestHandleRawInputWithActiveSession(t *testing.T) {
-	server := NewWebUIServer()
+	server := NewWebUIServer(nil)
 
 	sink := &MockSink{}
 	term, err := NewTerminal(sink)
@@ -800,7 +807,7 @@ func TestHandleRawInputWithActiveSession(t *testing.T) {
 
 // TestHandleRawInputWithNoSession verifies input is silently ignored
 func TestHandleRawInputWithNoSession(t *testing.T) {
-	server := NewWebUIServer()
+	server := NewWebUIServer(nil)
 
 	wsSink := &WebSocketSink{chatID: 999}
 	// Should not panic when no session exists
@@ -809,7 +816,7 @@ func TestHandleRawInputWithNoSession(t *testing.T) {
 
 // TestHandleRawInputWithInactiveSession verifies input is ignored for inactive sessions
 func TestHandleRawInputWithInactiveSession(t *testing.T) {
-	server := NewWebUIServer()
+	server := NewWebUIServer(nil)
 
 	session := &Session{
 		Active:    false,
@@ -936,5 +943,350 @@ func TestHTMLAutoFocusTerminal(t *testing.T) {
 func TestHTMLWindowResizeHandler(t *testing.T) {
 	if !strings.Contains(htmlContent, "window.addEventListener('resize'") {
 		t.Error("htmlContent missing window resize handler — terminal won't adapt to window size changes")
+	}
+}
+
+// --- WebUI Authentication Tests ---
+
+// newTestServer creates an httptest.Server from a WebUIServer with optional config.
+// Redirects config writes to a temp directory so tests don't corrupt the real config.
+// Call the returned cleanup function after ts.Close().
+func newTestServer(config *Config) (*WebUIServer, *httptest.Server, func()) {
+	// Redirect saveConfig to temp dir so tests don't overwrite real config
+	tmpDir, _ := os.MkdirTemp("", "webui-test-*")
+	configPathOverride = filepath.Join(tmpDir, "config.json")
+
+	srv := NewWebUIServer(config)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", srv.handleRoot)
+	mux.HandleFunc("/setup-password", srv.handleSetupPassword)
+	mux.HandleFunc("/login", srv.handleLogin)
+	mux.HandleFunc("/logout", srv.handleLogout)
+	mux.HandleFunc("/ws", srv.handleWebSocket)
+	ts := httptest.NewServer(mux)
+
+	cleanup := func() {
+		ts.Close()
+		os.RemoveAll(tmpDir)
+		configPathOverride = ""
+	}
+
+	return srv, ts, cleanup
+}
+
+// TestWebUISetupPassword verifies first-time setup flow
+func TestWebUISetupPassword(t *testing.T) {
+	srv, ts, cleanup := newTestServer(nil)
+	defer cleanup()
+
+	// GET / should show setup page when no password is set
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET / error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET / status = %d, want 200", resp.StatusCode)
+	}
+
+	// POST /setup-password with matching passwords
+	form := url.Values{"password": {"testpass123"}, "confirm": {"testpass123"}}
+	resp, err = http.PostForm(ts.URL+"/setup-password", form)
+	if err != nil {
+		t.Fatalf("POST /setup-password error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Should redirect to /
+	if resp.StatusCode != 200 {
+		t.Fatalf("POST /setup-password status = %d, want 200 (redirect followed)", resp.StatusCode)
+	}
+
+	// Config should now have a bcrypt hash
+	if srv.config == nil || srv.config.WebUIPasswordHash == "" {
+		t.Fatal("Password hash not set in config after setup")
+	}
+
+	// Verify it's a valid bcrypt hash
+	err = bcrypt.CompareHashAndPassword([]byte(srv.config.WebUIPasswordHash), []byte("testpass123"))
+	if err != nil {
+		t.Errorf("Stored hash doesn't match password: %v", err)
+	}
+}
+
+// TestWebUISetupPasswordMismatch verifies mismatched passwords are rejected
+func TestWebUISetupPasswordMismatch(t *testing.T) {
+	_, ts, cleanup := newTestServer(nil)
+	defer cleanup()
+
+	form := url.Values{"password": {"pass1"}, "confirm": {"pass2"}}
+	client := &http.Client{CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.PostForm(ts.URL+"/setup-password", form)
+	if err != nil {
+		t.Fatalf("POST error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Should show setup page again with error (200, not redirect)
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestWebUISetupPasswordEmpty verifies empty password is rejected
+func TestWebUISetupPasswordEmpty(t *testing.T) {
+	_, ts, cleanup := newTestServer(nil)
+	defer cleanup()
+
+	form := url.Values{"password": {""}, "confirm": {""}}
+	client := &http.Client{CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.PostForm(ts.URL+"/setup-password", form)
+	if err != nil {
+		t.Fatalf("POST error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestWebUILogin verifies login with correct and wrong passwords
+func TestWebUILogin(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.DefaultCost)
+	config := &Config{WebUIPasswordHash: string(hash)}
+	_, ts, cleanup := newTestServer(config)
+	defer cleanup()
+
+	// noRedirectClient prevents following redirects so we can inspect cookies
+	noRedirectClient := &http.Client{CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	// Wrong password → login page with error (200)
+	form := url.Values{"password": {"wrong"}}
+	resp, err := noRedirectClient.PostForm(ts.URL+"/login", form)
+	if err != nil {
+		t.Fatalf("POST /login (wrong) error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("Wrong password: status = %d, want 200", resp.StatusCode)
+	}
+
+	// Correct password → redirect with session cookie
+	form = url.Values{"password": {"secret"}}
+	resp, err = noRedirectClient.PostForm(ts.URL+"/login", form)
+	if err != nil {
+		t.Fatalf("POST /login (correct) error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("Correct password: status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
+	}
+
+	// Check session cookie was set
+	var sessionCookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "session" {
+			sessionCookie = c
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("No session cookie set after login")
+	}
+	if sessionCookie.Value == "" {
+		t.Error("Session cookie value is empty")
+	}
+}
+
+// TestWebUIWebSocketRejectsUnauthenticated verifies /ws returns 401 without cookie
+func TestWebUIWebSocketRejectsUnauthenticated(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.DefaultCost)
+	config := &Config{WebUIPasswordHash: string(hash)}
+	_, ts, cleanup := newTestServer(config)
+	defer cleanup()
+
+	// Try to access /ws without a session cookie
+	resp, err := http.Get(ts.URL + "/ws")
+	if err != nil {
+		t.Fatalf("GET /ws error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET /ws without auth: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+// TestWebUIWebSocketAcceptsAuthenticated verifies /ws allows authenticated requests
+func TestWebUIWebSocketAcceptsAuthenticated(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.DefaultCost)
+	config := &Config{WebUIPasswordHash: string(hash)}
+	srv, ts, cleanup := newTestServer(config)
+	defer cleanup()
+
+	// Create a valid auth session
+	token := srv.createAuthSession()
+
+	// Try /ws with cookie — it won't upgrade to WebSocket (no Upgrade header),
+	// but it should NOT return 401
+	req, _ := http.NewRequest("GET", ts.URL+"/ws", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: token})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /ws error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Should fail with "Bad Request" (missing Upgrade header), NOT 401
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Error("GET /ws with valid session returned 401 — auth gate rejected valid session")
+	}
+}
+
+// TestWebUILogout verifies logout clears session
+func TestWebUILogout(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.DefaultCost)
+	config := &Config{WebUIPasswordHash: string(hash)}
+	srv, ts, cleanup := newTestServer(config)
+	defer cleanup()
+
+	// Create session
+	token := srv.createAuthSession()
+
+	// Verify session exists
+	srv.mu.Lock()
+	_, exists := srv.authSessions[token]
+	srv.mu.Unlock()
+	if !exists {
+		t.Fatal("Auth session not created")
+	}
+
+	// Logout
+	noRedirectClient := &http.Client{CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	req, _ := http.NewRequest("POST", ts.URL+"/logout", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: token})
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /logout error: %v", err)
+	}
+	resp.Body.Close()
+
+	// Should redirect
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("Logout status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
+	}
+
+	// Session should be removed server-side
+	srv.mu.Lock()
+	_, exists = srv.authSessions[token]
+	srv.mu.Unlock()
+	if exists {
+		t.Error("Auth session still exists after logout")
+	}
+
+	// Cookie should be cleared
+	for _, c := range resp.Cookies() {
+		if c.Name == "session" && c.MaxAge > 0 {
+			t.Error("Session cookie not cleared after logout")
+		}
+	}
+}
+
+// TestWebUISessionExpiry verifies expired tokens are rejected
+func TestWebUISessionExpiry(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.DefaultCost)
+	config := &Config{WebUIPasswordHash: string(hash)}
+	srv, ts, cleanup := newTestServer(config)
+	defer cleanup()
+
+	// Create an already-expired session
+	token := generateSessionToken()
+	srv.mu.Lock()
+	srv.authSessions[token] = time.Now().Add(-1 * time.Hour) // expired 1 hour ago
+	srv.mu.Unlock()
+
+	// Request with expired token should show login page, not terminal
+	req, _ := http.NewRequest("GET", ts.URL+"/", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: token})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET / error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	// Expired session should be cleaned up
+	srv.mu.Lock()
+	_, exists := srv.authSessions[token]
+	srv.mu.Unlock()
+	if exists {
+		t.Error("Expired session was not cleaned up")
+	}
+}
+
+// TestWebUIRootShowsLoginWhenPasswordSet verifies unauthenticated GET / shows login
+func TestWebUIRootShowsLoginWhenPasswordSet(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.DefaultCost)
+	config := &Config{WebUIPasswordHash: string(hash)}
+	_, ts, cleanup := newTestServer(config)
+	defer cleanup()
+
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET / error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestWebUISetupBlockedWhenPasswordExists verifies /setup-password is blocked
+func TestWebUISetupBlockedWhenPasswordExists(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("existing"), bcrypt.DefaultCost)
+	config := &Config{WebUIPasswordHash: string(hash)}
+	_, ts, cleanup := newTestServer(config)
+	defer cleanup()
+
+	noRedirectClient := &http.Client{CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	form := url.Values{"password": {"newpass"}, "confirm": {"newpass"}}
+	resp, err := noRedirectClient.PostForm(ts.URL+"/setup-password", form)
+	if err != nil {
+		t.Fatalf("POST error: %v", err)
+	}
+	resp.Body.Close()
+
+	// Should redirect away (not accept new password)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("status = %d, want %d (should redirect, not accept new password)", resp.StatusCode, http.StatusSeeOther)
+	}
+}
+
+// TestGenerateSessionToken verifies token format and uniqueness
+func TestGenerateSessionToken(t *testing.T) {
+	token1 := generateSessionToken()
+	token2 := generateSessionToken()
+
+	if len(token1) != 64 { // 32 bytes = 64 hex chars
+		t.Errorf("Token length = %d, want 64", len(token1))
+	}
+
+	if token1 == token2 {
+		t.Error("Two generated tokens are identical — crypto/rand failure")
 	}
 }

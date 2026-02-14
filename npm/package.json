@@ -1,0 +1,40 @@
+{
+  "name": "remote-term",
+  "version": "0.1.0",
+  "description": "Remote terminal access via Telegram or browser WebUI. Full PTY support for interactive programs like Claude Code, Python REPL, vim.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jazztong/remote-terminal.git"
+  },
+  "homepage": "https://github.com/jazztong/remote-terminal#readme",
+  "keywords": [
+    "terminal",
+    "remote",
+    "telegram",
+    "webui",
+    "pty",
+    "shell",
+    "claude"
+  ],
+  "bin": {
+    "remote-term": "bin/remote-term"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "files": [
+    "bin/",
+    "install.js",
+    "README.md"
+  ]
+}

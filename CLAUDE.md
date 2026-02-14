@@ -141,28 +141,21 @@ func (tb *TelegramBridge) handleCommand(...) {
 
 ---
 
-### 🔴 CRITICAL: WebUI Authentication
+### ✅ RESOLVED: WebUI Authentication
 
 **File:** `webui.go`
-**Issue:** Zero authentication on WebSocket endpoint
+**Status:** Implemented in v2.1 (2026-02-14)
 
-```go
-// CURRENT (INSECURE):
-func (s *WebUIServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-    conn, err := upgrader.Upgrade(w, r, nil)
-    // NO AUTH CHECK!
-}
-```
+**Solution:** Password-based authentication with server-side sessions:
+- First access → "Create Password" page → bcrypt hash stored in config
+- Subsequent access → "Login" page → validate bcrypt → set session cookie
+- WebSocket endpoint rejects unauthenticated connections (401)
+- Sessions: `crypto/rand` 32-byte tokens, HttpOnly/SameSite=Strict cookies, 24h expiry
+- Origin-checking WebSocket upgrader (same-origin only)
 
-**Fix Required:** Implement one of:
-1. HTTP Basic Authentication
-2. Token-based authentication (URL param or header)
-3. Session-based authentication with cookies
+**Key routes:** `/` (root), `/setup-password`, `/login`, `/logout`, `/ws`
 
-**Constraints:**
-- Must work from browser (no client cert complexity)
-- Credentials stored in config file
-- Support `bcrypt` password hashing
+**Tests:** 12 auth tests covering setup, login, logout, session expiry, WebSocket gate
 
 ---
 
@@ -483,7 +476,7 @@ if len(config.AllowedUsers) == 0 {
 - ⚠️ Weak PRNG (TODO: use crypto/rand)
 
 **WebUI:**
-- ❌ **NO AUTH** - FIX REQUIRED in v2.1
+- ✅ Password auth + bcrypt hashing + server-side sessions (v2.1)
 
 ### Secrets Management
 
@@ -596,12 +589,11 @@ top -p $(pidof telegram-terminal)
 **Fix:** Add mutex (see Critical Code Areas)
 **Status:** Open (v2.1)
 
-### Issue #2: WebUI No Auth
+### Issue #2: WebUI Auth ✅ RESOLVED
 
-**Symptom:** Anyone on localhost can access
-**Workaround:** Only run on trusted machines
-**Fix:** Add authentication layer
-**Status:** Open (v2.1)
+**Symptom:** Anyone on localhost could access (fixed in v2.1)
+**Fix:** Password-based authentication with bcrypt + server-side sessions
+**Status:** Resolved (2026-02-14)
 
 ### Issue #3: Windows Process Group Kill
 
@@ -828,6 +820,7 @@ git push origin feat/add-authentication
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.1 | 2026-02-14 | WebUI password authentication, bcrypt, session cookies |
 | 2.0 | 2026-02-14 | Auto-session detection, WebUI mode |
 | 1.0 | 2026-01-XX | Initial release, Telegram bot |
 
@@ -866,7 +859,7 @@ git push origin feat/add-authentication
 ### Remember
 
 - This is a **security-sensitive** project (shell access)
-- **WebUI has no auth** - Critical vulnerability, fix in v2.1
+- **WebUI auth implemented** - bcrypt password + session cookies (v2.1)
 - **Race condition exists** - Session map needs mutex
 - **Tests are comprehensive** - Use them!
 - **Interface design is key** - Don't break OutputSink

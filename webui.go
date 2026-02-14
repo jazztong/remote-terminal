@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,24 +10,30 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for local testing
+		origin := r.Header.Get("Origin")
+		return origin == "" || origin == "http://"+r.Host || origin == "https://"+r.Host
 	},
 }
 
 type WebUIServer struct {
-	sessions map[int64]*Session
-	mu       sync.Mutex
-	nextID   int64
+	sessions     map[int64]*Session
+	authSessions map[string]time.Time // auth token → expiry
+	mu           sync.Mutex
+	nextID       int64
+	config       *Config
 }
 
-func NewWebUIServer() *WebUIServer {
+func NewWebUIServer(config *Config) *WebUIServer {
 	return &WebUIServer{
-		sessions: make(map[int64]*Session),
-		nextID:   1,
+		sessions:     make(map[int64]*Session),
+		authSessions: make(map[string]time.Time),
+		nextID:       1,
+		config:       config,
 	}
 }
 
@@ -75,6 +83,11 @@ func (w *WebSocketSink) SendStatus(status string) {
 }
 
 func (s *WebUIServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	if !s.isAuthenticated(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("WebSocket upgrade error: %v\n", err)
@@ -384,30 +397,366 @@ func (s *WebUIServer) cleanup(chatID int64) {
 }
 
 func (s *WebUIServer) Start(port int) {
-	http.HandleFunc("/ws", s.handleWebSocket)
-	http.HandleFunc("/", serveHTML)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleRoot)
+	mux.HandleFunc("/setup-password", s.handleSetupPassword)
+	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/logout", s.handleLogout)
+	mux.HandleFunc("/ws", s.handleWebSocket)
 
 	addr := fmt.Sprintf("localhost:%d", port)
 	log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	log.Printf("🌐 WebUI started: http://%s\n", addr)
 	log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("WebUI server error: %v\n", err)
 	}
 }
 
-func serveHTML(w http.ResponseWriter, r *http.Request) {
+// handleRoot serves the appropriate page based on auth state
+func (s *WebUIServer) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html")
+
+	// No password set yet → setup page
+	if s.config == nil || s.config.WebUIPasswordHash == "" {
+		fmt.Fprint(w, setupPasswordHTML)
+		return
+	}
+
+	// Not authenticated → login page
+	if !s.isAuthenticated(r) {
+		fmt.Fprint(w, loginHTML)
+		return
+	}
+
+	// Authenticated → terminal
 	fmt.Fprint(w, htmlContent)
 }
+
+// handleSetupPassword creates the initial password (first-time setup)
+func (s *WebUIServer) handleSetupPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Block if password already set
+	if s.config != nil && s.config.WebUIPasswordHash != "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	password := r.FormValue("password")
+	confirm := r.FormValue("confirm")
+
+	if password == "" {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, setupPasswordHTMLWithError("Password cannot be empty"))
+		return
+	}
+
+	if password != confirm {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, setupPasswordHTMLWithError("Passwords do not match"))
+		return
+	}
+
+	// Hash with bcrypt
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Initialize config if nil
+	if s.config == nil {
+		s.config = &Config{}
+	}
+	s.config.WebUIPasswordHash = string(hash)
+
+	// Save to disk
+	if err := saveConfig(s.config); err != nil {
+		log.Printf("Warning: could not save config: %v", err)
+	}
+
+	// Auto-login: create session
+	token := s.createAuthSession()
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// handleLogin validates password and creates a session
+func (s *WebUIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	password := r.FormValue("password")
+
+	if s.config == nil || s.config.WebUIPasswordHash == "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	err := bcrypt.CompareHashAndPassword([]byte(s.config.WebUIPasswordHash), []byte(password))
+	if err != nil {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, loginHTMLWithError("Invalid password"))
+		return
+	}
+
+	token := s.createAuthSession()
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// handleLogout clears the session
+func (s *WebUIServer) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie("session"); err == nil {
+		s.mu.Lock()
+		delete(s.authSessions, cookie.Value)
+		s.mu.Unlock()
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// isAuthenticated checks whether the request has a valid session cookie
+func (s *WebUIServer) isAuthenticated(r *http.Request) bool {
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		return false
+	}
+
+	s.mu.Lock()
+	expiry, exists := s.authSessions[cookie.Value]
+	s.mu.Unlock()
+
+	if !exists {
+		return false
+	}
+
+	if time.Now().After(expiry) {
+		// Expired — clean up
+		s.mu.Lock()
+		delete(s.authSessions, cookie.Value)
+		s.mu.Unlock()
+		return false
+	}
+
+	return true
+}
+
+// createAuthSession generates a crypto/rand session token and stores it
+func (s *WebUIServer) createAuthSession() string {
+	token := generateSessionToken()
+	s.mu.Lock()
+	s.authSessions[token] = time.Now().Add(24 * time.Hour)
+	s.mu.Unlock()
+	return token
+}
+
+// generateSessionToken creates a cryptographically random 32-byte hex token
+func generateSessionToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
+func setupPasswordHTMLWithError(errMsg string) string {
+	errorBlock := ""
+	if errMsg != "" {
+		errorBlock = `<div class="error">` + errMsg + `</div>`
+	}
+	return `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup - Remote Terminal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+            background: #1a1a1a;
+            color: #c0c0c0;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card {
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 40px;
+            width: 400px;
+        }
+        h1 { color: #00ff00; font-size: 18px; margin-bottom: 8px; }
+        .subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+        label { display: block; margin-bottom: 6px; font-size: 13px; color: #888; }
+        input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 4px;
+            color: #c0c0c0;
+            font-family: inherit;
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+        input[type="password"]:focus { outline: none; border-color: #00ff00; }
+        button {
+            width: 100%;
+            padding: 10px;
+            background: #00ff00;
+            color: #0a0a0a;
+            border: none;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        button:hover { background: #00cc00; }
+        .error { background: #3a1010; border: 1px solid #ff4444; color: #ff6666; padding: 10px; border-radius: 4px; margin-bottom: 16px; font-size: 13px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Create Password</h1>
+        <div class="subtitle">Set a password for Remote Terminal WebUI</div>
+        ` + errorBlock + `
+        <form method="POST" action="/setup-password">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autofocus>
+            <label for="confirm">Confirm Password</label>
+            <input type="password" id="confirm" name="confirm" required>
+            <button type="submit">Set Password</button>
+        </form>
+    </div>
+</body>
+</html>`
+}
+
+var setupPasswordHTML = setupPasswordHTMLWithError("")
+
+func loginHTMLWithError(errMsg string) string {
+	errorBlock := ""
+	if errMsg != "" {
+		errorBlock = `<div class="error">` + errMsg + `</div>`
+	}
+	return `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Remote Terminal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+            background: #1a1a1a;
+            color: #c0c0c0;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card {
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 40px;
+            width: 400px;
+        }
+        h1 { color: #00ff00; font-size: 18px; margin-bottom: 8px; }
+        .subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+        label { display: block; margin-bottom: 6px; font-size: 13px; color: #888; }
+        input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 4px;
+            color: #c0c0c0;
+            font-family: inherit;
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+        input[type="password"]:focus { outline: none; border-color: #00ff00; }
+        button {
+            width: 100%;
+            padding: 10px;
+            background: #00ff00;
+            color: #0a0a0a;
+            border: none;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        button:hover { background: #00cc00; }
+        .error { background: #3a1010; border: 1px solid #ff4444; color: #ff6666; padding: 10px; border-radius: 4px; margin-bottom: 16px; font-size: 13px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Remote Terminal</h1>
+        <div class="subtitle">Enter your password to continue</div>
+        ` + errorBlock + `
+        <form method="POST" action="/login">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autofocus>
+            <button type="submit">Login</button>
+        </form>
+    </div>
+</body>
+</html>`
+}
+
+var loginHTML = loginHTMLWithError("")
 
 const htmlContent = `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telegram Terminal - WebUI</title>
+    <title>Remote Terminal</title>
     <!-- xterm.js Terminal Emulator -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
@@ -472,7 +821,7 @@ const htmlContent = `<!DOCTYPE html>
 </head>
 <body>
     <header>
-        <h1>TELEGRAM TERMINAL - LOCAL TEST UI</h1>
+        <h1>REMOTE TERMINAL</h1>
         <div class="status" id="status">Connecting...</div>
     </header>
     
