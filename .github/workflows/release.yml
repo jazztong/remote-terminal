@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   test:
@@ -69,6 +70,9 @@ jobs:
   publish-npm:
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: npm
@@ -78,13 +82,13 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
+      - name: Ensure latest npm (trusted publishing requires 11.5.1+)
+        run: npm install -g npm@latest
       - name: Set version from tag
         env:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           VERSION="${TAG_NAME#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
-      - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public
