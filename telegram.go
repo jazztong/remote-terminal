@@ -235,10 +235,9 @@ func (tb *TelegramBridge) Listen() {
 		if text == "/start" {
 			msg := tgbotapi.NewMessage(chatID,
 				"✅ Connected!\n\n"+
-					"Just send commands:\n"+
-					"• ls, pwd, cat → one-shot commands\n"+
-					"• claude, python3, node → auto-starts interactive session\n"+
-					"• /exit or /stop → end interactive session\n"+
+					"Just send commands — a persistent shell session\n"+
+					"starts automatically. cd, env vars, etc. persist.\n\n"+
+					"• /exit or /stop → end session\n"+
 					"• /status → show session info")
 			tb.bot.Send(msg)
 			continue
@@ -296,7 +295,9 @@ func isInteractiveCommand(cmd string) bool {
 	return false
 }
 
-// handleCommand intelligently routes commands to session or one-shot
+// handleCommand routes all commands to a persistent session.
+// If no session exists, one is auto-started so that state (cwd, env vars)
+// persists across commands.
 func (tb *TelegramBridge) handleCommand(chatID int64, username, text string) {
 	// Check if session exists
 	tb.mu.RLock()
@@ -313,14 +314,8 @@ func (tb *TelegramBridge) handleCommand(chatID int64, username, text string) {
 		return
 	}
 
-	// No session - decide if we need one
-	if isInteractiveCommand(text) {
-		// Start persistent session
-		tb.startSession(chatID, username, text)
-	} else {
-		// One-shot command
-		tb.executeCommand(chatID, username, text)
-	}
+	// No session — auto-start persistent shell session
+	tb.startSession(chatID, username, text)
 }
 
 // startSession starts a persistent interactive session
@@ -561,37 +556,6 @@ func (tb *TelegramBridge) streamSessionOutput(chatID int64) {
 	}
 }
 
-func (tb *TelegramBridge) executeCommand(chatID int64, username, command string) {
-	fmt.Printf("📱 @%s → [one-shot] %s\n\n", username, command)
-
-	// Show "typing..." while command runs
-	typing := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
-	tb.bot.Send(typing)
-
-	// Create fresh terminal for one-shot command
-	sink := &TelegramSink{
-		bot:    tb.bot,
-		chatID: chatID,
-	}
-
-	terminal, err := NewTerminal(sink)
-	if err != nil {
-		log.Printf("Error creating terminal: %v\n", err)
-		msg := tgbotapi.NewMessage(chatID, "❌ Error creating terminal")
-		tb.bot.Send(msg)
-		return
-	}
-	defer terminal.Close()
-
-	// Send command
-	terminal.SendCommand(command)
-
-	// Stream output
-	terminal.StreamOutput()
-
-	fmt.Println("✓ Complete")
-	fmt.Println()
-}
 
 // CleanupAllSessions stops all active sessions and cleans up resources
 func (tb *TelegramBridge) CleanupAllSessions() {
