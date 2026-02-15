@@ -12,7 +12,6 @@ const PLATFORM_MAP = {
   "linux-x64": "remote-term-linux-amd64",
   "darwin-x64": "remote-term-darwin-amd64",
   "darwin-arm64": "remote-term-darwin-arm64",
-  "win32-x64": "remote-term-windows-amd64.exe",
 };
 
 function getBinaryName() {
