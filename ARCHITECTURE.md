@@ -327,9 +327,10 @@ ws := &pty.Winsize{
 
 ```go
 type TelegramBridge struct {
+    mu       sync.RWMutex
     bot      *tgbotapi.BotAPI
     config   *Config
-    sessions map[int64]*Session  // ⚠️ TODO: Add mutex
+    sessions map[int64]*Session  // Protected by mu
 }
 
 type Session struct {
@@ -759,43 +760,23 @@ func (s *WebUIServer) getSession(id string) *Session {
     return s.sessions[id]
 }
 
-// ⚠️ BUG: TelegramBridge NOT protected
+// ✅ RESOLVED (v0.1.6): TelegramBridge now protected
 type TelegramBridge struct {
-    sessions map[int64]*Session  // ← Race condition!
+    mu       sync.RWMutex
+    sessions map[int64]*Session  // Protected by mu
 }
-// TODO: Add sync.RWMutex
 ```
 
 ---
 
 ### Race Condition Analysis
 
-**Detected Issue: TelegramBridge Session Map**
+**Previously Detected Issue: TelegramBridge Session Map** — **RESOLVED (v0.1.6)**
+
+`sync.RWMutex` has been added to `TelegramBridge`. All session map access (read, write, delete) is now protected.
 
 ```go
-// UNSAFE: Concurrent access possible
-func (tb *TelegramBridge) handleCommand(...) {
-    session, hasSession := tb.sessions[chatID]  // READ
-    // ...
-}
-
-func (tb *TelegramBridge) startSession(...) {
-    tb.sessions[chatID] = newSession  // WRITE
-}
-
-func (tb *TelegramBridge) stopSession(...) {
-    delete(tb.sessions, chatID)  // DELETE
-}
-```
-
-**Scenario:** Two messages arrive simultaneously from same user
-- Goroutine 1: Checks `sessions[123]` → nil
-- Goroutine 2: Checks `sessions[123]` → nil
-- Both try to start session → race on map write
-
-**Fix Required:**
-
-```go
+// FIXED (v0.1.6): All access protected by mu
 type TelegramBridge struct {
     mu       sync.RWMutex
     sessions map[int64]*Session
@@ -807,7 +788,21 @@ func (tb *TelegramBridge) handleCommand(...) {
     tb.mu.RUnlock()
     // ...
 }
+
+func (tb *TelegramBridge) startSession(...) {
+    tb.mu.Lock()
+    tb.sessions[chatID] = newSession
+    tb.mu.Unlock()
+}
+
+func (tb *TelegramBridge) stopSession(...) {
+    tb.mu.Lock()
+    delete(tb.sessions, chatID)
+    tb.mu.Unlock()
+}
 ```
+
+Verified with `go test -race`.
 
 ---
 
@@ -1043,7 +1038,7 @@ func runWebUIMode(port int)
 
 **Dependencies:**
 - `encoding/json` - Config file parsing
-- `math/rand` - Approval code generation
+- `crypto/rand` - Approval code generation
 
 **Test Coverage:** 100% (utilities)
 
@@ -1302,19 +1297,15 @@ remote-term --version          → Show version
 
 ### Critical (Security/Stability)
 
-1. **Race Condition in TelegramBridge** ⚠️ HIGH
-   - Session map accessed without mutex
-   - Fix: Add `sync.RWMutex`
-   - Effort: 1 hour
+1. ~~**Race Condition in TelegramBridge**~~ ✅ RESOLVED
+   - Fixed in v0.1.6: `sync.RWMutex` added to protect all session map access
 
 2. ~~**WebUI Zero Authentication**~~ ✅ RESOLVED
    - Fixed in v0.1.3: bcrypt password auth + session cookies
    - Origin-checking WebSocket upgrader
 
-3. **Deprecated rand.Seed** ⚠️ MEDIUM
-   - Will break in future Go versions
-   - Fix: Use `crypto/rand`
-   - Effort: 30 minutes
+3. ~~**Deprecated rand.Seed**~~ ✅ RESOLVED
+   - Fixed in v0.1.6: replaced with `crypto/rand`, 8-digit codes, 15-min expiry, 5-attempt limit
 
 ---
 

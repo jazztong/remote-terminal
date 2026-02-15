@@ -69,18 +69,16 @@ go test -bench=. -benchmem        # Benchmarks
 
 ## Known Open Issues
 
-### 🔴 Race Condition in Session Map
+### ✅ RESOLVED: Race Condition in Session Map
 
-**File:** `telegram.go` — `TelegramBridge.sessions` map has NO mutex protection.
+**File:** `telegram.go` — `TelegramBridge.sessions` map now protected by `sync.RWMutex`. Fixed in v0.1.6.
 
 → Full analysis: [ARCHITECTURE.md — Race Condition Analysis](./ARCHITECTURE.md#race-condition-analysis)
 → Security impact: [SECURITY.md — CVE-INTERNAL-003](./SECURITY.md#cve-internal-003-race-condition-in-session-map)
 
-**When fixing:** Add `sync.RWMutex`, protect ALL map access (read AND write), test with `go test -race`.
+### ✅ RESOLVED: Weak Approval Code PRNG
 
-### 🟡 Weak Approval Code PRNG
-
-**File:** `main.go:97-99` — uses `math/rand` instead of `crypto/rand`.
+**File:** `main.go` — now uses `crypto/rand` with 8-digit codes, 15-min expiry, 5-attempt limit, constant-time comparison. Fixed in v0.1.6.
 
 → Details: [SECURITY.md — CVE-INTERNAL-002](./SECURITY.md#cve-internal-002-weak-approval-code-generation)
 
@@ -313,7 +311,6 @@ git tag v0.1.5 && git push origin v0.1.5
 ## Notes for Claude
 
 - This is a **security-sensitive** project (full shell access)
-- **Race condition exists** in `telegram.go` session map — needs mutex
 - **Interface design is key** — don't break `OutputSink` contract
 - **Tests are comprehensive** — always run them before and after changes
 - Read ARCHITECTURE.md before structural changes

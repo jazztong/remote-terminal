@@ -26,7 +26,7 @@
 
 | Component | Security Level | Status |
 |-----------|---------------|--------|
-| **Telegram Bot** | MEDIUM | ⚠️ Functional but needs hardening |
+| **Telegram Bot** | MEDIUM | ✅ Hardened (mutex, crypto/rand) |
 | **WebUI** | MEDIUM | ✅ Password auth + session cookies |
 | **PTY Execution** | HIGH RISK | ⚠️ Full shell access, no sandboxing |
 | **Config Storage** | LOW | ✅ Proper file permissions (0600) |
@@ -320,40 +320,24 @@ if err != nil {
 
 #### Layer 2: Approval Code
 
-**Implementation:**
+**Implementation (v0.1.6):**
 ```go
 func generateCode() string {
-    return fmt.Sprintf("%05d", rand.Intn(100000))  // ⚠️ math/rand, not crypto/rand
+    b := make([]byte, 4)
+    crypto_rand.Read(b)
+    code := binary.BigEndian.Uint32(b) % 100000000  // 8-digit code
+    return fmt.Sprintf("%08d", code)
 }
 ```
 
 **Security Properties:**
 - ✅ One-time use
 - ✅ Required for first connection
-- ✅ Auto-seeded (Go 1.20+ uses random seed by default)
-- ⚠️ Only 100,000 possible values
-- ⚠️ No expiration time
-- ⚠️ Not cryptographically secure (math/rand)
-
-**Threats:**
-- Brute force: 100,000 attempts needed
-- Timing: No rate limiting on guesses
-- Weak PRNG: Predictable if seed known
-
-**Improvements Needed:**
-```go
-import "crypto/rand"
-
-func generateCode() (string, error) {
-    b := make([]byte, 3)
-    _, err := rand.Read(b)
-    if err != nil {
-        return "", err
-    }
-    num := int(b[0])<<16 | int(b[1])<<8 | int(b[2])
-    return fmt.Sprintf("%05d", num%100000), nil
-}
-```
+- ✅ Cryptographically secure (`crypto/rand`)
+- ✅ 100,000,000 possible values (8 digits)
+- ✅ 15-minute expiration
+- ✅ 5-attempt limit (lockout)
+- ✅ Constant-time comparison (`subtle.ConstantTimeCompare`)
 
 ---
 
@@ -438,67 +422,82 @@ The WebUI interface previously had no authentication mechanism.
 
 #### CVE-INTERNAL-002: Weak Approval Code Generation
 
-**Severity:** HIGH (CVSS 7.5)
+**Severity:** HIGH (CVSS 7.5) — **RESOLVED (v0.1.6)**
 
 **Description:**
-Approval code uses weak PRNG (math/rand) with predictable seed (time.Now()). Only 100,000 possible values, no rate limiting.
+Approval code previously used weak PRNG (math/rand) with predictable seed. Only 100,000 possible values, no rate limiting.
 
-**Affected Code:**
+**Fixed Code (v0.1.6):**
 ```go
 func generateCode() string {
-    return fmt.Sprintf("%05d", rand.Intn(100000))  // math/rand
+    b := make([]byte, 4)
+    crypto_rand.Read(b)
+    code := binary.BigEndian.Uint32(b) % 100000000  // 8-digit code
+    return fmt.Sprintf("%08d", code)
 }
 ```
 
-**Attack Vector:**
-- Brute force 100,000 codes
-- No rate limiting or account lockout
+**Security Properties (Post-Fix):**
+- ✅ 8-digit codes (100,000,000 keyspace)
+- ✅ `crypto/rand` (cryptographically secure)
+- ✅ Constant-time comparison (`subtle.ConstantTimeCompare`)
+- ✅ 15-minute expiration
+- ✅ 5-attempt limit (lockout after 5 failures)
+- ✅ One-time use
 
-**Impact:**
+**Impact (if unpatched):**
 - Unauthorized user whitelisting
 - Bot access without permission
 
-**Mitigation:** ⚠️ Partial (one-time use limits window)
+**Mitigation:** ✅ Fully mitigated
 
-**Fix:** Use crypto/rand, increase to 8 digits, add expiration
-
-**Status:** Open
+**Timeline:**
+- Discovered: 2026-02-14
+- Fixed: 2026-02-15 (v0.1.6)
+- Status: **RESOLVED**
 
 ---
 
 #### CVE-INTERNAL-003: Race Condition in Session Map
 
-**Severity:** HIGH (CVSS 7.4)
+**Severity:** HIGH (CVSS 7.4) — **RESOLVED (v0.1.6)**
 
 **Description:**
-TelegramBridge.sessions map accessed without mutex protection. Concurrent message handling can corrupt map.
+TelegramBridge.sessions map was previously accessed without mutex protection. Concurrent message handling could corrupt map.
 
-**Affected Code:**
+**Fixed Code (v0.1.6):**
 ```go
 type TelegramBridge struct {
-    sessions map[int64]*Session  // No mutex!
+    mu       sync.RWMutex
+    bot      *tgbotapi.BotAPI
+    config   *Config
+    sessions map[int64]*Session  // Protected by mu
 }
 
 func (tb *TelegramBridge) handleCommand(...) {
-    session := tb.sessions[chatID]  // RACE!
+    tb.mu.RLock()
+    session, hasSession := tb.sessions[chatID]
+    tb.mu.RUnlock()
+    // ...
 }
 ```
 
-**Attack Vector:**
+**Attack Vector (pre-fix):**
 - Send two messages simultaneously
 - Trigger concurrent map write
 - Crash or undefined behavior
 
-**Impact:**
+**Impact (if unpatched):**
 - Service crash
 - Session corruption
 - Potential data corruption
 
-**Mitigation:** ❌ None
+**Mitigation:** ✅ Fully mitigated (sync.RWMutex on all map access)
 
-**Fix:** Add sync.RWMutex
-
-**Status:** Open
+**Timeline:**
+- Discovered: 2026-02-14
+- Fixed: 2026-02-15 (v0.1.6)
+- Status: **RESOLVED**
 
 ---
 
@@ -895,17 +894,17 @@ remote-term
 | Risk | Compliance | Notes |
 |------|------------|-------|
 | A01: Broken Access Control | ✅ PASS | WebUI password auth + session cookies |
-| A02: Cryptographic Failures | ⚠️ PARTIAL | Weak PRNG, plaintext storage |
+| A02: Cryptographic Failures | ✅ PASS | crypto/rand for codes, bcrypt for passwords |
 | A03: Injection | ✅ N/A | Shell access by design |
 | A04: Insecure Design | ⚠️ PARTIAL | No sandboxing |
 | A05: Security Misconfiguration | ⚠️ PARTIAL | WebUI auth on, but no TLS |
 | A06: Vulnerable Components | ✅ PASS | Dependencies up-to-date |
-| A07: Auth Failures | ⚠️ PARTIAL | Weak approval code |
+| A07: Auth Failures | ✅ PASS | Hardened approval code (crypto/rand, expiry, lockout) |
 | A08: Software/Data Integrity | ✅ PASS | Go mod verify |
 | A09: Logging/Monitoring | ❌ FAIL | No audit logs |
 | A10: SSRF | ✅ N/A | No external requests |
 
-**Overall:** ⚠️ **NOT COMPLIANT** (4 failures, 5 partial)
+**Overall:** ⚠️ **PARTIAL** (2 failures, 3 partial)
 
 ---
 
@@ -927,8 +926,8 @@ remote-term
 
 **Completed:**
 - [x] **P0:** Add WebUI authentication (bcrypt password + session cookies)
-- [ ] **P0:** Fix race condition in session map (add mutex)
-- [ ] **P0:** Replace weak PRNG with crypto/rand
+- [x] **P0:** Fix race condition in session map (add mutex) — **v0.1.6**
+- [x] **P0:** Replace weak PRNG with crypto/rand — **v0.1.6**
 - [ ] **P1:** Add rate limiting on authentication attempts
 - [ ] **P1:** Implement bot token encryption at rest
 
@@ -980,6 +979,7 @@ remote-term
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-02-15 | 1.3 | CVE-INTERNAL-002 (PRNG) and CVE-INTERNAL-003 (race condition) RESOLVED in v0.1.6; CVE-INTERNAL-008 (channel double-close) RESOLVED; updated OWASP compliance |
 | 2026-02-15 | 1.2 | Fix version refs (v2.1→0.1.3), update code examples |
 | 2026-02-15 | 1.1 | Updated for 0.1.x release, binary rename |
 | 2026-02-14 | 1.0 | Initial security documentation |
@@ -994,7 +994,7 @@ remote-term
 
 ---
 
-**Document Version:** 1.2
+**Document Version:** 1.3
 **Classification:** Internal Use
 **Last Reviewed:** 2026-02-15
 **Next Review:** 2026-05-15 (quarterly)
