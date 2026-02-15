@@ -1282,8 +1282,8 @@ remote-term --version          → Show version
 
 ### Decision 5: Auto-Session vs Manual Session
 
-**v1.0:** Manual `/session start` required
-**v2.0:** Auto-detection ✅ **Chosen**
+**v0.0.x:** Manual `/session start` required
+**v0.1.x:** Auto-detection ✅ **Chosen**
 
 **Rationale:**
 - 60% fewer user commands
@@ -1308,7 +1308,7 @@ remote-term --version          → Show version
    - Effort: 1 hour
 
 2. ~~**WebUI Zero Authentication**~~ ✅ RESOLVED
-   - Fixed in v2.1: bcrypt password auth + session cookies
+   - Fixed in v0.1.3: bcrypt password auth + session cookies
    - Origin-checking WebSocket upgrader
 
 3. **Deprecated rand.Seed** ⚠️ MEDIUM
@@ -1368,7 +1368,7 @@ remote-term --version          → Show version
 
 ## Future Enhancements
 
-### v2.1 Architecture Changes
+### Next Architecture Changes
 
 1. **Session Persistence**
    - Save session state to disk
