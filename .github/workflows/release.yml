@@ -28,12 +28,19 @@ jobs:
           - goos: linux
             goarch: amd64
             suffix: linux-amd64
+            ext: ""
           - goos: darwin
             goarch: amd64
             suffix: darwin-amd64
+            ext: ""
           - goos: darwin
             goarch: arm64
             suffix: darwin-arm64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            suffix: windows-amd64
+            ext: ".exe"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -44,14 +51,16 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           TAG_NAME: ${{ github.ref_name }}
+          SUFFIX: ${{ matrix.suffix }}
+          EXT: ${{ matrix.ext }}
         run: |
           VERSION="${TAG_NAME#v}"
           go build -ldflags="-s -w -X main.version=${VERSION}" \
-            -o "remote-term-${{ matrix.suffix }}" .
+            -o "remote-term-${SUFFIX}${EXT}" .
       - uses: actions/upload-artifact@v4
         with:
-          name: remote-term-${{ matrix.suffix }}
-          path: remote-term-${{ matrix.suffix }}
+          name: remote-term-${{ matrix.suffix }}${{ matrix.ext }}
+          path: remote-term-${{ matrix.suffix }}${{ matrix.ext }}
 
   release:
     needs: build

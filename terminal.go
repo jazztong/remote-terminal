@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -49,13 +48,8 @@ func getCleanEnvironment() []string {
 
 // NewTerminal creates a new terminal instance
 func NewTerminal(sink OutputSink) (*Terminal, error) {
-	// Determine shell
-	shellCmd := "/bin/bash"
-	shellArgs := []string{"--norc", "--noprofile"}
-	if _, err := os.Stat(shellCmd); err != nil {
-		shellCmd = "/bin/sh"
-		shellArgs = []string{} // sh doesn't support --norc
-	}
+	// Determine shell (platform-specific)
+	shellCmd, shellArgs := getShell()
 
 	// Start shell in PTY with full TTY environment
 	// Use cleaned environment to allow independent sessions (e.g., Claude in browser while running in Claude)
@@ -82,11 +76,8 @@ func NewTerminal(sink OutputSink) (*Terminal, error) {
 		"IS_TTY=1",
 	)
 	
-	// Enable TTY mode - allows proper signal handling
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid:  true,  // Create new session (TTY requirement)
-		Setctty: true,  // Make this the controlling terminal
-	}
+	// Set platform-specific process attributes for TTY support
+	setProcAttr(cmd)
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -268,21 +259,9 @@ func (t *Terminal) Close() {
 	}
 	
 	if t.cmd != nil && t.cmd.Process != nil {
-		// Send SIGHUP to the session - proper TTY termination
-		// Since we used Setsid, this kills the entire session
-		if t.cmd.Process.Pid > 0 {
-			// Kill the session group
-			syscall.Kill(-t.cmd.Process.Pid, syscall.SIGHUP)
-			
-			// Give processes time to cleanup
-			time.Sleep(100 * time.Millisecond)
-			
-			// Force kill if still alive
-			t.cmd.Process.Signal(syscall.SIGTERM)
-			time.Sleep(50 * time.Millisecond)
-			t.cmd.Process.Kill()
-		}
-		
+		// Kill the process tree (platform-specific)
+		killProcessGroup(t.cmd)
+
 		t.cmd.Wait() // Clean up zombie
 	}
 	
