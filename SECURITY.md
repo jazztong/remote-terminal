@@ -3,7 +3,7 @@
 
 **Version:** 0.1.x
 **Last Updated:** 2026-02-15
-**Security Level:** MEDIUM (Telegram), MEDIUM (WebUI)
+**Security Level:** LOW (Telegram), LOW (WebUI)
 
 ---
 
@@ -26,8 +26,8 @@
 
 | Component | Security Level | Status |
 |-----------|---------------|--------|
-| **Telegram Bot** | MEDIUM | ✅ Hardened (mutex, crypto/rand) |
-| **WebUI** | MEDIUM | ✅ Password auth + session cookies |
+| **Telegram Bot** | LOW | ✅ Hardened (mutex, crypto/rand, expiry, lockout) |
+| **WebUI** | LOW | ✅ Password auth + session cookies + origin check |
 | **PTY Execution** | HIGH RISK | ⚠️ Full shell access, no sandboxing |
 | **Config Storage** | LOW | ✅ Proper file permissions (0600) |
 | **Dependencies** | LOW | ✅ Minimal, well-maintained |
@@ -78,7 +78,7 @@
 - ⚠️ Bot token theft via process listing
 - ❌ Telegram API compromise (out of scope)
 
-**Risk Level:** LOW (Telegram), CRITICAL (exposed WebUI)
+**Risk Level:** LOW (Telegram), MEDIUM (exposed WebUI without TLS)
 
 ---
 
@@ -931,7 +931,7 @@ remote-term
 - [ ] **P1:** Add rate limiting on authentication attempts
 - [ ] **P1:** Implement bot token encryption at rest
 
-**Risk Reduction:** CRITICAL → MEDIUM
+**Risk Reduction:** CRITICAL → LOW
 
 ---
 
