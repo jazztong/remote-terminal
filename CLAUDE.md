@@ -25,10 +25,13 @@ Cross-platform terminal bridge — remote shell access via **Telegram** and **br
 ├── telegram.go          - Telegram bot, session management
 ├── webui.go             - WebSocket server + embedded UI + auth
 ├── terminal.go          - PTY management, streaming
+├── daemon.go            - Daemon mode (Linux/macOS): start, stop, status
+├── daemon_windows.go    - Daemon stub (unsupported on Windows)
 ├── markdown.go          - Markdown-to-Telegram-HTML converter
 ├── screenreader.go      - VTE-based terminal screen reader
 ├── standalone.go        - CLI testing mode
 ├── npm/                 - npm package (install.js, bin stubs)
+├── examples/            - Deployment examples (remote-term.service)
 ├── .github/workflows/   - CI/CD (release.yml)
 └── *_test.go            - Test suite (85+ tests)
 ```
@@ -222,10 +225,16 @@ go build -ldflags="-s -w -X main.version=0.1.5" -o remote-term .
 ### Running
 
 ```bash
-remote-term                 # Telegram mode
-remote-term --web 8080      # WebUI mode
+remote-term                 # Telegram mode (foreground)
+remote-term --web 8080      # WebUI mode (foreground)
+remote-term --daemon        # Start as background daemon
+remote-term --daemon --web 8080  # Daemon with WebUI
+remote-term --stop          # Stop running daemon
+remote-term --status        # Check if daemon is running
 remote-term --version       # Check version
 ```
+
+Daemon mode writes logs to `~/.telegram-terminal/remote-term.log` and PID to `~/.telegram-terminal/remote-term.pid`. Not supported on Windows (use `nohup` instead). See [ARCHITECTURE.md -- Daemon Architecture](./ARCHITECTURE.md#daemon-architecture) for design details.
 
 ### Releasing
 
@@ -271,9 +280,10 @@ Types: feat, fix, docs, test, refactor, perf, security
 ## Emergency: Production Crash
 
 ```bash
-pkill remote-term                    # Stop service
+remote-term --stop                   # Stop daemon (if running as daemon)
+pkill remote-term                    # Stop service (if running foreground)
 ps aux | grep defunct                # Check zombies
-tail -100 bot.log                    # Check logs
+tail -100 ~/.telegram-terminal/remote-term.log  # Check daemon logs
 ```
 
 → Full incident response: [SECURITY.md — Incident Response](./SECURITY.md#incident-response)
@@ -287,15 +297,22 @@ tail -100 bot.log                    # Check logs
 go build -o remote-term .
 go test -v && go test -race
 
-# Run
+# Run (foreground)
 remote-term                     # Telegram mode
 remote-term --web 8080          # WebUI mode
+
+# Run (daemon)
+remote-term --daemon            # Start background daemon
+remote-term --stop              # Stop daemon
+remote-term --status            # Check daemon status
 
 # Release
 git tag v0.1.5 && git push origin v0.1.5
 
-# Config
-~/.telegram-terminal/config.json  # 0600 permissions
+# Config & daemon files
+~/.telegram-terminal/config.json    # 0600 permissions
+~/.telegram-terminal/remote-term.pid  # Daemon PID file
+~/.telegram-terminal/remote-term.log  # Daemon log file
 ```
 
 ### Reference Documents

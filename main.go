@@ -31,6 +31,69 @@ func main() {
 		return
 	}
 
+	// --stop: stop running daemon
+	if len(os.Args) > 1 && os.Args[1] == "--stop" {
+		daemonStop()
+		return
+	}
+
+	// --status: check daemon status
+	if len(os.Args) > 1 && os.Args[1] == "--status" {
+		daemonStatus()
+		return
+	}
+
+	// --daemon: start as background daemon
+	// --daemon-child: internal flag used by the daemon parent process
+	// Check for --daemon or --daemon-child anywhere in args (can combine with --web)
+	isDaemon := false
+	isDaemonChild := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--daemon" {
+			isDaemon = true
+		}
+		if arg == "--daemon-child" {
+			isDaemonChild = true
+		}
+	}
+
+	if isDaemon {
+		// Build extra args (everything except --daemon)
+		var extraArgs []string
+		for _, arg := range os.Args[1:] {
+			if arg != "--daemon" {
+				extraArgs = append(extraArgs, arg)
+			}
+		}
+		daemonize(extraArgs)
+		return
+	}
+
+	// If this is the daemon child process, set up logging and PID cleanup
+	if isDaemonChild {
+		// Remove --daemon-child from args for downstream parsing
+		var cleanArgs []string
+		cleanArgs = append(cleanArgs, os.Args[0])
+		for _, arg := range os.Args[1:] {
+			if arg != "--daemon-child" {
+				cleanArgs = append(cleanArgs, arg)
+			}
+		}
+		os.Args = cleanArgs
+
+		// Set up log output to the log file
+		logFile, err := os.OpenFile(logFilePath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			log.SetOutput(logFile)
+		}
+
+		// Set cleanup hook for signal-based shutdown (os.Exit bypasses defers)
+		daemonCleanupHook = removePIDFile
+
+		// Ensure PID file cleanup on normal exit (defer)
+		defer removePIDFile()
+	}
+
 	// Check for standalone mode
 	if len(os.Args) > 1 && os.Args[1] == "--standalone" {
 		RunStandalone()
@@ -63,6 +126,10 @@ func main() {
 
 // configPathOverride allows tests to redirect config to a temp directory
 var configPathOverride string
+
+// daemonCleanupHook is set when running as daemon child to clean up PID file on signal shutdown.
+// This is called by TelegramBridge.Listen() signal handler (since os.Exit bypasses defers).
+var daemonCleanupHook func()
 
 func getConfigPath() string {
 	if configPathOverride != "" {
@@ -255,6 +322,11 @@ func startListening() {
 	bridge, err := NewTelegramBridge(bot, config)
 	if err != nil {
 		log.Fatalf("Error creating bridge: %v", err)
+	}
+
+	// Set cleanup hook for daemon mode (PID file removal on signal shutdown)
+	if daemonCleanupHook != nil {
+		bridge.cleanupHook = daemonCleanupHook
 	}
 
 	bridge.Listen()

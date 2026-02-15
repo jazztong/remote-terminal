@@ -1,0 +1,16 @@
+[Unit]
+Description=Remote Terminal - Telegram/WebUI Shell Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/remote-term
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/.telegram-terminal/remote-term.log
+StandardError=append:%h/.telegram-terminal/remote-term.log
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

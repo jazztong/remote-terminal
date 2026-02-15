@@ -30,6 +30,8 @@
 | **WebUI** | LOW | ✅ Password auth + session cookies + origin check |
 | **PTY Execution** | HIGH RISK | ⚠️ Full shell access, no sandboxing |
 | **Config Storage** | LOW | ✅ Proper file permissions (0600) |
+| **Daemon Log File** | MEDIUM | ⚠️ May contain command output (0644) |
+| **Daemon PID File** | LOW | ✅ Non-sensitive (0644) |
 | **Dependencies** | LOW | ✅ Minimal, well-maintained |
 
 ### Design Principles
@@ -677,6 +679,33 @@ go mod tidy
 go mod verify
 ```
 
+#### 6. Secure Daemon Mode
+
+```bash
+# Log file may contain sensitive command output — restrict permissions
+chmod 600 ~/.telegram-terminal/remote-term.log
+
+# PID file is non-sensitive (0644 is fine)
+ls -l ~/.telegram-terminal/remote-term.pid
+
+# Daemon mode requires existing config (cannot do first-time setup)
+# Always run interactive setup FIRST, then switch to daemon:
+remote-term              # First run: complete setup interactively
+remote-term --stop       # Stop foreground, then:
+remote-term --daemon     # Start as daemon
+
+# Rotate logs periodically (daemon appends indefinitely)
+logrotate /etc/logrotate.d/remote-term  # If configured
+# Or manually:
+> ~/.telegram-terminal/remote-term.log  # Truncate
+```
+
+**Daemon Security Notes:**
+- The log file (`remote-term.log`) captures stdout/stderr, which may include terminal output from executed commands. Treat it with the same sensitivity as shell history.
+- PID file permissions are 0644 (world-readable) since the PID value is not sensitive and `--status` needs to read it.
+- Daemon mode skips the interactive setup flow. If no config exists, the daemon will fail to start. This prevents accidental exposure of the approval code flow in a non-interactive context.
+- The systemd unit file (`examples/remote-term.service`) is provided as a reference. Review and adjust `User=`, `WorkingDirectory=`, and environment settings before deploying.
+
 ---
 
 ### For Developers (Code)
@@ -799,7 +828,8 @@ lsof -i -P -n | grep remote-term
 
 ```bash
 # Stop the service immediately
-pkill -9 remote-term
+remote-term --stop       # If running as daemon
+pkill -9 remote-term     # If running in foreground or --stop fails
 
 # Kill all sessions
 pkill -9 -f "bash --norc"
@@ -864,6 +894,8 @@ remote-term
 
 **Data Storage:**
 - Config file: `~/.telegram-terminal/config.json`
+- Daemon log: `~/.telegram-terminal/remote-term.log` (if daemon mode)
+- Daemon PID: `~/.telegram-terminal/remote-term.pid` (if daemon mode)
 - Logs: `bot.log`, `webui.log` (if enabled)
 - Memory: Active sessions only
 

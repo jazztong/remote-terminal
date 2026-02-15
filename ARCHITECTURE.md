@@ -17,9 +17,10 @@
 7. [Module Breakdown](#module-breakdown)
 8. [Interface Contracts](#interface-contracts)
 9. [Deployment Architecture](#deployment-architecture)
-10. [Performance Characteristics](#performance-characteristics)
-11. [Design Decisions](#design-decisions)
-12. [Technical Debt](#technical-debt)
+10. [Daemon Architecture](#daemon-architecture)
+11. [Performance Characteristics](#performance-characteristics)
+12. [Design Decisions](#design-decisions)
+13. [Technical Debt](#technical-debt)
 
 ---
 
@@ -68,6 +69,8 @@
 | `telegram.go` | Telegram bot, session routing |
 | `webui.go` | WebSocket server, embedded UI, auth |
 | `terminal.go` | PTY management, streaming |
+| `daemon.go` | Daemon mode: re-exec, PID file, signal handling |
+| `daemon_windows.go` | Daemon stub (unsupported, suggests nohup) |
 | `markdown.go` | Markdown-to-Telegram-HTML converter |
 | `screenreader.go` | VTE-based terminal screen reader |
 | `standalone.go` | CLI testing mode |
@@ -1112,7 +1115,9 @@ remote-term (binary)
     │
     └─ External files:
         └─ ~/.telegram-terminal/
-            └─ config.json (created on setup)
+            ├─ config.json (created on setup)
+            ├─ remote-term.pid (daemon mode)
+            └─ remote-term.log (daemon mode)
 ```
 
 **Build Process:**
@@ -1138,8 +1143,12 @@ go build -ldflags="-s -w -X main.version=0.1.3" -o remote-term .
 ### Runtime Modes
 
 ```
-remote-term                    → Telegram bot mode
-remote-term --web 8080         → WebUI mode
+remote-term                    → Telegram bot mode (foreground)
+remote-term --web 8080         → WebUI mode (foreground)
+remote-term --daemon           → Background daemon mode
+remote-term --daemon --web 8080 → Daemon with WebUI
+remote-term --stop             → Stop running daemon
+remote-term --status           → Check daemon status
 remote-term --standalone       → CLI testing mode
 remote-term --version          → Show version
 ```
@@ -1151,6 +1160,103 @@ remote-term --version          → Show version
 | Telegram | 12MB | <1% | 1-3% | 2 + 2×sessions |
 | WebUI | 7MB | <1% | 1-3% | 2 + 2×sessions |
 | Both | 19MB | <1% | 2-5% | 4 + 4×sessions |
+
+---
+
+## Daemon Architecture
+
+### Overview
+
+Daemon mode (`--daemon`) runs remote-term as a background process with log output redirected to a file. Managed via `--stop` and `--status` flags.
+
+**Files:**
+- `daemon.go` — Linux/macOS implementation
+- `daemon_windows.go` — Stub that prints an unsupported message and suggests `nohup`
+- `examples/remote-term.service` — systemd unit file for production deployments
+
+---
+
+### Re-exec Pattern (Why Not Fork)
+
+Go's runtime uses multiple OS threads for goroutine scheduling. The traditional Unix `fork()` only duplicates the calling thread, leaving the Go runtime in a broken state (missing scheduler threads, corrupted GC state). This makes `fork()` unsafe in Go programs.
+
+**Solution:** The daemon re-executes itself as a new process with a sentinel environment variable to distinguish the child:
+
+```
+Parent (--daemon)                    Child (re-exec'd)
+┌─────────────────────┐              ┌─────────────────────┐
+│ 1. Parse --daemon   │              │ 1. Detect sentinel  │
+│ 2. Set sentinel env │──os.Exec()──▶│    env var           │
+│ 3. Redirect stdout/ │              │ 2. Run normal main  │
+│    stderr to log    │              │    (Telegram/WebUI)  │
+│ 4. Start child      │              │ 3. Write PID file   │
+│ 5. Exit immediately │              └─────────────────────┘
+└─────────────────────┘
+```
+
+The parent sets `stdout` and `stderr` to the log file (`~/.telegram-terminal/remote-term.log`), starts the child via `os.StartProcess`, then exits. The child detects the sentinel and proceeds with normal operation.
+
+---
+
+### PID File Lifecycle
+
+**Location:** `~/.telegram-terminal/remote-term.pid`
+**Permissions:** 0644 (readable by any user for status checks)
+
+```
+--daemon start:
+  1. Check if PID file exists
+  2. If exists, check if process is alive (kill -0)
+  3. If alive → error "already running"
+  4. If stale → remove PID file, proceed
+  5. Start child process
+  6. Child writes own PID to file
+
+--stop:
+  1. Read PID from file
+  2. Send SIGTERM to process
+  3. Wait briefly for graceful shutdown
+  4. Remove PID file
+
+--status:
+  1. Read PID from file
+  2. Check if process alive (kill -0)
+  3. Report running/stopped
+```
+
+Stale PID detection prevents a common failure mode where the daemon crashes but the PID file remains.
+
+---
+
+### Signal Handling
+
+The daemon child installs signal handlers for graceful shutdown:
+
+```
+SIGTERM (from --stop)
+  │
+  ▼
+Signal handler fires
+  │
+  ├─ Close all active sessions (Terminal.Close())
+  ├─ Stop Telegram polling / HTTP server
+  ├─ Remove PID file
+  └─ os.Exit(0)
+```
+
+This ensures child processes (shells, interactive programs) are cleaned up before the daemon exits, preventing zombie processes.
+
+---
+
+### Platform Support
+
+| Platform | Daemon Support | Alternative |
+|----------|---------------|-------------|
+| Linux | Full (`--daemon`, `--stop`, `--status`) | systemd (`examples/remote-term.service`) |
+| macOS | Full (`--daemon`, `--stop`, `--status`) | launchd (manual setup) |
+| Windows | Not supported | `nohup` or run as Windows Service |
+
+The `daemon_windows.go` build file provides a compile-time stub that prints a message directing users to alternatives.
 
 ---
 

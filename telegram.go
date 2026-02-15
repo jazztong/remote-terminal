@@ -171,10 +171,11 @@ func (s *Session) safeCloseDone() {
 
 // TelegramBridge manages Telegram bot and terminal
 type TelegramBridge struct {
-	bot      *tgbotapi.BotAPI
-	config   *Config
-	mu       sync.RWMutex
-	sessions map[int64]*Session // chatID -> active session
+	bot         *tgbotapi.BotAPI
+	config      *Config
+	mu          sync.RWMutex
+	sessions    map[int64]*Session // chatID -> active session
+	cleanupHook func()            // Called during signal-based shutdown (e.g., remove PID file)
 }
 
 func NewTelegramBridge(bot *tgbotapi.BotAPI, config *Config) (*TelegramBridge, error) {
@@ -198,6 +199,9 @@ func (tb *TelegramBridge) Listen() {
 		<-sigChan
 		log.Println("\n🛑 Shutting down gracefully...")
 		tb.CleanupAllSessions()
+		if tb.cleanupHook != nil {
+			tb.cleanupHook()
+		}
 		os.Exit(0)
 	}()
 
