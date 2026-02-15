@@ -63,10 +63,27 @@ async function main() {
   const outputName = isWindows ? "remote-term-binary.exe" : "remote-term-binary";
   const outputPath = path.join(binDir, outputName);
 
+  // Remove old binary before downloading new one (clean upgrade)
+  try {
+    fs.unlinkSync(outputPath);
+  } catch (_) {
+    // Ignore if doesn't exist
+  }
+
   console.log(`Downloading remote-term v${VERSION} for ${process.platform}-${process.arch}...`);
 
   try {
     const data = await download(url);
+
+    // Validate binary is not empty or an HTML error page
+    if (data.length < 1024) {
+      throw new Error(`Downloaded file too small (${data.length} bytes) — likely not a valid binary`);
+    }
+    const header = data.slice(0, 16).toString("utf8");
+    if (header.includes("<html") || header.includes("<!DOCTYPE")) {
+      throw new Error("Downloaded an HTML page instead of a binary — release may not exist yet");
+    }
+
     fs.mkdirSync(binDir, { recursive: true });
     fs.writeFileSync(outputPath, data);
 
@@ -76,7 +93,8 @@ async function main() {
 
     console.log(`Installed remote-term v${VERSION} to ${outputPath}`);
   } catch (err) {
-    console.error(`Failed to download remote-term: ${err.message}`);
+    console.error(`\n*** Failed to install remote-term v${VERSION} ***`);
+    console.error(`Error: ${err.message}`);
     console.error(`\nManual install:`);
     console.error(`  Download: ${url}`);
     console.error(`  Place in: ${binDir}`);
