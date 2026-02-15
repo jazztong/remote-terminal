@@ -7,9 +7,9 @@ A cross-platform terminal bridge that gives you remote shell access via **Telegr
 - **Telegram + WebUI** — two interfaces, same core. Use whichever fits your workflow.
 - **Interactive programs** — full PTY support means Claude Code, Python REPL, node, vim, etc. all work.
 - **Markdown rendering** — Claude's markdown output renders as rich HTML in Telegram (bold, code blocks, headers, links).
-- **Secure** — approval code + user whitelist for Telegram. Only authorized users can execute commands.
+- **Secure** — approval code + user whitelist for Telegram. Password auth for WebUI.
 - **Single binary** — no runtime dependencies. Build once, run anywhere.
-- **Cross-platform** — Linux, macOS (Intel + Apple Silicon), Windows.
+- **Cross-platform** — Linux, macOS (Intel + Apple Silicon).
 
 ## Install
 
@@ -33,44 +33,84 @@ go build -o remote-term .
 
 Download pre-built binaries from [Releases](https://github.com/jazztong/remote-terminal/releases).
 
-## Quick Start
+## Setup
 
-### Prerequisites
+### 1. Create a Telegram Bot
 
-- A Telegram bot token (from [@BotFather](https://t.me/botfather)) — only needed for Telegram mode
+1. Open [@BotFather](https://t.me/botfather) in Telegram
+2. Send `/newbot` and follow the prompts
+3. Copy the bot token (e.g. `1234567890:ABCdefGHI...`)
 
-### Run — Telegram Mode
+### 2. Configure Remote Terminal
 
 ```bash
 remote-term
 ```
 
-On first run, you'll be prompted to set up your bot:
+On first run, you'll see:
 
 ```
-Remote Terminal v2.0
+Remote Terminal v0.1.x
 
 Run: /setup <bot-token>
 ```
 
-1. Paste your bot token: `/setup <YOUR_BOT_TOKEN>`
-2. The terminal displays an approval code
-3. Open your bot in Telegram and send that code
-4. Done — you're connected. Send commands from Telegram.
+Paste your bot token:
 
-### Run — WebUI Mode
-
-```bash
-./remote-terminal --web 8080
+```
+/setup 1234567890:ABCdefGHI...
 ```
 
-Open `http://localhost:8080` in your browser. On first access you'll be prompted to create a password. After that, login is required to access the terminal. Full terminal emulation via xterm.js.
+The terminal will display a 5-digit approval code:
+
+```
+Bot connected: @YourBotName
+
+Then send this approval code:
+    --> 48291
+
+Waiting for approval...
+```
+
+### 3. Approve in Telegram
+
+Open your bot in Telegram and send the approval code (`48291`). Your Telegram user ID is now whitelisted.
+
+```
+✅ User approved!
+```
+
+The bot is ready. Send any command from Telegram.
+
+### 4. Set a Default Workspace (Optional)
+
+By default, commands run from wherever `remote-term` was started. To always start in a specific directory:
+
+```bash
+cd /path/to/your/workspace && remote-term
+```
+
+Or create an alias:
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+alias remote-term='cd ~/projects && remote-term'
+```
 
 ## Usage
 
-### Simple Commands
+### Telegram Commands
 
-Send any shell command from Telegram:
+| Command | Description |
+|---------|-------------|
+| `/start` | Show help and available commands |
+| `/status` | Show active session info |
+| `/exit` or `/stop` | End the current interactive session |
+| Any text | Runs as shell command or routes to active session |
+
+### One-Shot Commands
+
+Send any shell command from Telegram — output is returned directly:
 
 ```
 ls -la
@@ -78,8 +118,6 @@ git status
 docker ps
 df -h
 ```
-
-Plain command output is sent as-is — no unnecessary formatting.
 
 ### Interactive Sessions
 
@@ -90,9 +128,18 @@ claude          # Claude Code session
 python3         # Python REPL
 node            # Node.js REPL
 vim file.txt    # Vim editor
+ssh user@host   # SSH session
 ```
 
-While in a session, all messages are routed to the running program. Use `/exit` to end the session.
+While in a session, all messages are routed to the running program. Send `/exit` to end the session.
+
+### WebUI Mode
+
+```bash
+remote-term --web 8080
+```
+
+Open `http://localhost:8080` in your browser. On first access you'll be prompted to create a password. After that, login is required. Full terminal emulation via WebSocket.
 
 ### Telegram Formatting
 
@@ -109,39 +156,54 @@ When running Claude Code, markdown responses are rendered as rich HTML in Telegr
 
 Long responses use Telegram's expandable blockquote. Plain command output (ls, pwd, etc.) is sent without HTML wrapping.
 
-## Architecture
+## Adding Users
 
-```
-┌──────────────┐     ┌────────────────┐     ┌─────────────┐
-│  Telegram     │────▶│                │────▶│             │
-│  Bot API      │◀────│  Terminal      │◀────│  PTY        │
-└──────────────┘     │  Manager       │     │  (shell)    │
-                     │                │     │             │
-┌──────────────┐     │  OutputSink    │     └─────────────┘
-│  WebUI        │────▶│  interface     │
-│  (WebSocket)  │◀────│                │
-└──────────────┘     └────────────────┘
+Only the first user (who sends the approval code) is whitelisted automatically. To add more users:
+
+1. Get the user's Telegram ID — they can find it via [@userinfobot](https://t.me/userinfobot)
+2. Edit the config file:
+
+```bash
+nano ~/.telegram-terminal/config.json
 ```
 
-Both Telegram and WebUI implement the `OutputSink` interface, sharing 95% of the terminal management code:
+3. Add their ID to `allowed_users`:
 
-```go
-type OutputSink interface {
-    SendOutput(output string)
-    SendStatus(status string)
+```json
+{
+  "bot_token": "...",
+  "allowed_users": [400702758, 123456789]
 }
 ```
 
-### File Structure
+4. Restart `remote-term`
 
+## Reset
+
+### Reset Telegram Setup (new bot token or re-approve)
+
+```bash
+rm ~/.telegram-terminal/config.json
+remote-term
 ```
-main.go           Entry point, config, ANSI cleaning
-telegram.go       Telegram bot, session management, markdown output
-terminal.go       PTY management, command execution, output streaming
-webui.go          WebSocket server + embedded HTML/JS terminal
-standalone.go     CLI testing mode
-markdown.go       Markdown-to-Telegram-HTML converter
-screenreader.go   VTE-based terminal screen reader
+
+This restarts the setup flow — you'll need to enter a new bot token and approve again.
+
+### Reset WebUI Password
+
+Edit the config and remove the password hash:
+
+```bash
+nano ~/.telegram-terminal/config.json
+```
+
+Delete the `"webui_password_hash"` line, save, and restart. The next WebUI access will prompt you to create a new password.
+
+### Full Reset (remove everything)
+
+```bash
+rm -rf ~/.telegram-terminal
+remote-term
 ```
 
 ## Configuration
@@ -156,9 +218,11 @@ Config is stored at `~/.telegram-terminal/config.json` (created automatically du
 }
 ```
 
-- **bot_token** — from [@BotFather](https://t.me/botfather)
-- **allowed_users** — Telegram user IDs authorized to send commands. Get yours from [@userinfobot](https://t.me/userinfobot).
-- **webui_password_hash** — bcrypt hash of WebUI password (set automatically on first WebUI access)
+| Field | Description |
+|-------|-------------|
+| `bot_token` | Telegram bot token from [@BotFather](https://t.me/botfather) |
+| `allowed_users` | Telegram user IDs authorized to send commands |
+| `webui_password_hash` | bcrypt hash of WebUI password (set automatically on first WebUI access) |
 
 File permissions are set to `0600` (owner read/write only).
 
@@ -173,41 +237,31 @@ File permissions are set to `0600` (owner read/write only).
 
 > **Warning:** This tool provides full shell access to your machine. Only authorize trusted users.
 
+## Architecture
+
+```
+┌──────────────┐     ┌────────────────┐     ┌─────────────┐
+│  Telegram     │────▶│                │────▶│             │
+│  Bot API      │◀────│  Terminal      │◀────│  PTY        │
+└──────────────┘     │  Manager       │     │  (shell)    │
+                     │                │     │             │
+┌──────────────┐     │  OutputSink    │     └─────────────┘
+│  WebUI        │────▶│  interface     │
+│  (WebSocket)  │◀────│                │
+└──────────────┘     └────────────────┘
+```
+
+Both Telegram and WebUI implement the `OutputSink` interface, sharing 95% of the terminal management code.
+
 ## Testing
 
 ```bash
-# Run all tests
-go test -v
-
-# With race detection
-go test -race -v
-
-# Coverage report
-go test -cover
-
-# Benchmark markdown converter
-go test -bench=BenchmarkFormatMarkdown -benchmem
+go test -v          # Run all tests
+go test -race -v    # With race detection
+go test -cover      # Coverage report
 ```
 
 85+ tests covering terminal management, markdown conversion, WebUI authentication, and end-to-end flows.
-
-## Building for All Platforms
-
-```bash
-# Linux
-GOOS=linux GOARCH=amd64 go build -o remote-terminal-linux-amd64
-
-# macOS Intel
-GOOS=darwin GOARCH=amd64 go build -o remote-terminal-darwin-amd64
-
-# macOS Apple Silicon
-GOOS=darwin GOARCH=arm64 go build -o remote-terminal-darwin-arm64
-
-# Windows
-GOOS=windows GOARCH=amd64 go build -o remote-terminal-windows-amd64.exe
-```
-
-Or use the build script: `./build.sh`
 
 ## Credits
 
