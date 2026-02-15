@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -148,18 +149,31 @@ func needsMonospace(s string) bool {
 
 // Session represents a persistent terminal session
 type Session struct {
-	Terminal  *Terminal
-	Sink      OutputSink
-	Active    bool
-	Command   string
-	StartedAt time.Time
-	done      chan struct{} // Signal to stop streaming goroutine
+	Terminal   *Terminal
+	Sink       OutputSink
+	Active     bool
+	Command    string
+	StartedAt  time.Time
+	done       chan struct{} // Signal to stop streaming goroutine
+	doneClosed bool         // Tracks whether done channel has been closed
+	closeMu    sync.Mutex   // Protects doneClosed and close(done)
+}
+
+// safeCloseDone closes the done channel exactly once, preventing double-close panics.
+func (s *Session) safeCloseDone() {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if !s.doneClosed {
+		close(s.done)
+		s.doneClosed = true
+	}
 }
 
 // TelegramBridge manages Telegram bot and terminal
 type TelegramBridge struct {
 	bot      *tgbotapi.BotAPI
 	config   *Config
+	mu       sync.RWMutex
 	sessions map[int64]*Session // chatID -> active session
 }
 
@@ -281,8 +295,10 @@ func isInteractiveCommand(cmd string) bool {
 // handleCommand intelligently routes commands to session or one-shot
 func (tb *TelegramBridge) handleCommand(chatID int64, username, text string) {
 	// Check if session exists
+	tb.mu.RLock()
 	session, hasSession := tb.sessions[chatID]
-	
+	tb.mu.RUnlock()
+
 	// If session exists and active, send to it
 	if hasSession && session.Active {
 		fmt.Printf("📱 @%s → [session] %s\n\n", username, text)
@@ -292,7 +308,7 @@ func (tb *TelegramBridge) handleCommand(chatID int64, username, text string) {
 		session.Terminal.SendCommand(text)
 		return
 	}
-	
+
 	// No session - decide if we need one
 	if isInteractiveCommand(text) {
 		// Start persistent session
@@ -329,7 +345,9 @@ func (tb *TelegramBridge) startSession(chatID int64, username, command string) {
 		StartedAt: time.Now(),
 		done:      make(chan struct{}),
 	}
+	tb.mu.Lock()
 	tb.sessions[chatID] = session
+	tb.mu.Unlock()
 
 	// Show "typing..." while session starts up
 	typing := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
@@ -346,18 +364,21 @@ func (tb *TelegramBridge) startSession(chatID int64, username, command string) {
 
 // stopSession ends the active session
 func (tb *TelegramBridge) stopSession(chatID int64, username string) {
+	tb.mu.Lock()
 	session, exists := tb.sessions[chatID]
 	if !exists || !session.Active {
+		tb.mu.Unlock()
 		msg := tgbotapi.NewMessage(chatID, "⚠️ No active session")
 		tb.bot.Send(msg)
 		return
 	}
+	session.Active = false
+	delete(tb.sessions, chatID)
+	tb.mu.Unlock()
 
 	fmt.Printf("📱 @%s → [stop session]\n\n", username)
-	session.Active = false
-	close(session.done) // Signal goroutine to stop
+	session.safeCloseDone() // Signal goroutine to stop
 	session.Terminal.Close()
-	delete(tb.sessions, chatID)
 
 	msg := tgbotapi.NewMessage(chatID, "✅ Session ended")
 	tb.bot.Send(msg)
@@ -365,13 +386,16 @@ func (tb *TelegramBridge) stopSession(chatID int64, username string) {
 
 // showStatus shows current session info
 func (tb *TelegramBridge) showStatus(chatID int64) {
+	tb.mu.RLock()
 	session, exists := tb.sessions[chatID]
+	tb.mu.RUnlock()
+
 	if !exists || !session.Active {
 		msg := tgbotapi.NewMessage(chatID, "📊 Status: No active session")
 		tb.bot.Send(msg)
 		return
 	}
-	
+
 	duration := time.Since(session.StartedAt).Round(time.Second)
 	status := fmt.Sprintf("📊 Active Session\n\n"+
 		"Command: %s\n"+
@@ -380,13 +404,16 @@ func (tb *TelegramBridge) showStatus(chatID int64) {
 		session.Command,
 		duration,
 		session.StartedAt.Format("15:04:05"))
-	
+
 	msg := tgbotapi.NewMessage(chatID, status)
 	tb.bot.Send(msg)
 }
 
 func (tb *TelegramBridge) streamSessionOutput(chatID int64) {
+	tb.mu.RLock()
 	session, exists := tb.sessions[chatID]
+	tb.mu.RUnlock()
+
 	if !exists {
 		log.Printf("Session output stream: session not found for chat %d\n", chatID)
 		return
@@ -397,11 +424,14 @@ func (tb *TelegramBridge) streamSessionOutput(chatID int64) {
 	defer func() {
 		log.Printf("Session streaming ended for chat %d\n", chatID)
 		// Cleanup on exit
+		tb.mu.Lock()
 		if session.Active {
 			session.Active = false
-			session.Terminal.Close()
 			delete(tb.sessions, chatID)
 		}
+		tb.mu.Unlock()
+		// Close terminal WITHOUT holding the lock (blocking operation)
+		session.Terminal.Close()
 	}()
 
 	// Virtual terminal emulator — interprets ANSI cursor positioning
@@ -561,27 +591,25 @@ func (tb *TelegramBridge) executeCommand(chatID int64, username, command string)
 
 // CleanupAllSessions stops all active sessions and cleans up resources
 func (tb *TelegramBridge) CleanupAllSessions() {
+	tb.mu.Lock()
 	log.Printf("Cleaning up %d active sessions...\n", len(tb.sessions))
-	
+	// Copy sessions to local slice and clear the map while holding the lock
+	activeSessions := make([]*Session, 0)
 	for chatID, session := range tb.sessions {
 		if session.Active {
 			log.Printf("Stopping session for chat %d\n", chatID)
 			session.Active = false
-			
-			// Close done channel if not already closed
-			select {
-			case <-session.done:
-				// Already closed
-			default:
-				close(session.done)
-			}
-			
-			session.Terminal.Close()
+			activeSessions = append(activeSessions, session)
 		}
 	}
-	
-	// Clear session map
 	tb.sessions = make(map[int64]*Session)
+	tb.mu.Unlock()
+
+	// Close each session WITHOUT holding the lock (blocking operations)
+	for _, session := range activeSessions {
+		session.safeCloseDone()
+		session.Terminal.Close()
+	}
 	log.Println("All sessions cleaned up")
 }
 

@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,9 +96,12 @@ func saveConfig(config *Config) error {
 	return os.WriteFile(getConfigPath(), data, 0600)
 }
 
-func generateCode() string {
-	rand.Seed(time.Now().UnixNano())
-	return fmt.Sprintf("%05d", rand.Intn(100000))
+func generateCode() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(100000000))
+	if err != nil {
+		return "", fmt.Errorf("crypto/rand failed: %w", err)
+	}
+	return fmt.Sprintf("%08d", n.Int64()), nil
 }
 
 func setupWithApproval() {
@@ -118,7 +123,11 @@ func setupWithApproval() {
 				continue
 			}
 
-			approvalCode := generateCode()
+			approvalCode, err := generateCode()
+			if err != nil {
+				fmt.Printf("❌ Error generating approval code: %v\n", err)
+				return
+			}
 
 			fmt.Println("✅ Connected!")
 			fmt.Printf("🤖 Bot: @%s\n", bot.Self.UserName)
@@ -129,7 +138,7 @@ func setupWithApproval() {
 			fmt.Println("Then send this approval code:")
 			fmt.Println()
 			fmt.Printf("    👉 %s\n\n", approvalCode)
-			fmt.Println("Waiting for approval...")
+			fmt.Println("Waiting for approval (expires in 15 minutes)...")
 
 			// Wait for approval
 			u := tgbotapi.NewUpdate(0)
@@ -137,17 +146,29 @@ func setupWithApproval() {
 			updates := bot.GetUpdatesChan(u)
 
 			approved := false
+			attempts := 0
+			maxAttempts := 5
+			codeExpiry := time.Now().Add(15 * time.Minute)
 
 			for update := range updates {
 				if update.Message == nil {
 					continue
 				}
 
+				// Check expiration
+				if time.Now().After(codeExpiry) {
+					fmt.Println("\n❌ Approval code expired. Please restart setup.")
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID,
+						"❌ Approval code expired. Please restart the setup process.")
+					bot.Send(msg)
+					return
+				}
+
 				userID := update.Message.From.ID
 				username := update.Message.From.UserName
 				text := update.Message.Text
 
-				if text == approvalCode {
+				if subtle.ConstantTimeCompare([]byte(text), []byte(approvalCode)) == 1 {
 					approved = true
 
 					// Save config
@@ -177,8 +198,17 @@ func setupWithApproval() {
 
 					break
 				} else {
+					attempts++
+					remaining := maxAttempts - attempts
+					if remaining <= 0 {
+						fmt.Println("\n❌ Too many failed attempts. Please restart setup.")
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID,
+							"❌ Too many failed attempts. Approval locked. Please restart the setup process.")
+						bot.Send(msg)
+						return
+					}
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID,
-						"❌ Invalid approval code. Check your terminal.")
+						fmt.Sprintf("❌ Invalid approval code. %d attempts remaining.", remaining))
 					bot.Send(msg)
 				}
 			}

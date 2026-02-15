@@ -23,31 +23,66 @@ func TestGenerateCode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			codes := make(map[string]bool)
 			for i := 0; i < tt.runs; i++ {
-				code := generateCode()
-				
-				// Check length
-				if len(code) != 5 {
-					t.Errorf("generateCode() length = %d, want 5", len(code))
+				code, err := generateCode()
+				if err != nil {
+					t.Fatalf("generateCode() returned error: %v", err)
 				}
-				
+
+				// Check length (8-digit codes using crypto/rand)
+				if len(code) != 8 {
+					t.Errorf("generateCode() length = %d, want 8", len(code))
+				}
+
 				// Check digits only
 				for _, c := range code {
 					if c < '0' || c > '9' {
 						t.Errorf("generateCode() contains non-digit: %c", c)
 					}
 				}
-				
+
 				// Check uniqueness (for multiple runs)
 				if tt.runs > 1 {
 					codes[code] = true
 				}
 			}
-			
-			// For 100 runs, expect at least 90 unique codes (high probability)
-			if tt.runs == 100 && len(codes) < 90 {
+
+			// For 100 runs with 8-digit codes, expect at least 99 unique (very high probability)
+			if tt.runs == 100 && len(codes) < 99 {
 				t.Errorf("generateCode() not random enough: got %d unique codes out of %d runs", len(codes), tt.runs)
 			}
 		})
+	}
+}
+
+// TestGenerateCodeCryptoSecure tests that generateCode uses crypto/rand and produces secure codes
+func TestGenerateCodeCryptoSecure(t *testing.T) {
+	// Test 1: Returns 8-digit string
+	code, err := generateCode()
+	if err != nil {
+		t.Fatalf("generateCode() error: %v", err)
+	}
+	if len(code) != 8 {
+		t.Errorf("code length = %d, want 8", len(code))
+	}
+
+	// Test 2: All digits
+	for _, c := range code {
+		if c < '0' || c > '9' {
+			t.Errorf("non-digit character: %c", c)
+		}
+	}
+
+	// Test 3: Uniqueness over 1000 runs
+	codes := make(map[string]bool)
+	for i := 0; i < 1000; i++ {
+		c, err := generateCode()
+		if err != nil {
+			t.Fatalf("generateCode() error on iteration %d: %v", i, err)
+		}
+		codes[c] = true
+	}
+	if len(codes) < 990 {
+		t.Errorf("poor uniqueness: %d unique out of 1000", len(codes))
 	}
 }
 
@@ -445,7 +480,7 @@ func BenchmarkCleanANSI(b *testing.B) {
 // BenchmarkGenerateCode benchmarks code generation
 func BenchmarkGenerateCode(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		generateCode()
+		_, _ = generateCode()
 	}
 }
 
