@@ -160,7 +160,7 @@ wscat -c ws://localhost:8080/ws
 - ✅ WebSocket origin validation
 - ✅ WebUI only on localhost by default
 
-**Status:** ✅ **MITIGATED (v2.1)**
+**Status:** ✅ **MITIGATED (v0.1.3)**
 
 ---
 
@@ -175,7 +175,7 @@ cat ~/.telegram-terminal/config.json
 # Permission denied (if 0600)
 
 # Alternative: Process listing during setup
-ps aux | grep telegram-terminal
+ps aux | grep remote-term
 # May show bot token in command args during /setup
 ```
 
@@ -322,18 +322,18 @@ if err != nil {
 
 **Implementation:**
 ```go
-func generateCode() int {
-    rand.Seed(time.Now().UnixNano())  // ⚠️ WEAK - Use crypto/rand
-    return rand.Intn(90000) + 10000   // 5-digit: 10000-99999
+func generateCode() string {
+    return fmt.Sprintf("%05d", rand.Intn(100000))  // ⚠️ math/rand, not crypto/rand
 }
 ```
 
 **Security Properties:**
 - ✅ One-time use
 - ✅ Required for first connection
+- ✅ Auto-seeded (Go 1.20+ uses random seed by default)
 - ⚠️ Only 100,000 possible values
 - ⚠️ No expiration time
-- ⚠️ Weak randomness (math/rand)
+- ⚠️ Not cryptographically secure (math/rand)
 
 **Threats:**
 - Brute force: 100,000 attempts needed
@@ -387,7 +387,7 @@ func (tb *TelegramBridge) isAuthorized(userID int64) bool {
 
 **Current State:** ✅ **Password-based auth with session cookies**
 
-**Implementation (v2.1):**
+**Implementation (v0.1.3):**
 - First access: "Create Password" setup page (bcrypt hashed, saved to config)
 - Subsequent access: Login page validates password against bcrypt hash
 - On success: `crypto/rand` 32-byte hex session token stored server-side
@@ -414,14 +414,14 @@ func (tb *TelegramBridge) isAuthorized(userID int64) bool {
 
 #### CVE-INTERNAL-001: WebUI Unauthenticated Command Execution
 
-**Severity:** CRITICAL (CVSS 9.8) — **RESOLVED in v2.1**
+**Severity:** CRITICAL (CVSS 9.8) — **RESOLVED in v0.1.3**
 
 **Description:**
 The WebUI interface previously had no authentication mechanism.
 
-**Affected Versions:** 1.0, 2.0
+**Affected Versions:** pre-0.1.3
 
-**Fix Applied (v2.1):**
+**Fix Applied (v0.1.3):**
 - Password-based authentication with bcrypt hashing
 - Server-side session management with 24h expiry
 - WebSocket endpoint gated behind session validation
@@ -429,7 +429,7 @@ The WebUI interface previously had no authentication mechanism.
 
 **Timeline:**
 - Discovered: 2026-02-14
-- Fixed: 2026-02-14 (v2.1)
+- Fixed: 2026-02-14 (v0.1.3)
 - Status: **RESOLVED**
 
 ---
@@ -445,14 +445,14 @@ Approval code uses weak PRNG (math/rand) with predictable seed (time.Now()). Onl
 
 **Affected Code:**
 ```go
-rand.Seed(time.Now().UnixNano())
-code := rand.Intn(90000) + 10000
+func generateCode() string {
+    return fmt.Sprintf("%05d", rand.Intn(100000))  // math/rand
+}
 ```
 
 **Attack Vector:**
 - Brute force 100,000 codes
-- Predict seed if system time known
-- No account lockout
+- No rate limiting or account lockout
 
 **Impact:**
 - Unauthorized user whitelisting
@@ -514,11 +514,11 @@ During `/setup <token>` command, bot token may appear in process arguments visib
 **Attack Vector:**
 ```bash
 # During setup
-./telegram-terminal
+remote-term
 > /setup 7234567890:AAHdqTcvCH1vGEqJmOXL5tB6Dw7GvM9Yw_Q
 
 # Attacker runs
-ps aux | grep telegram
+ps aux | grep remote-term
 # May see token in args
 ```
 
@@ -618,12 +618,12 @@ echo ".telegram-terminal/" >> ~/.gitignore
 #### 2. Limit WebUI Exposure
 
 ```bash
-# ❌ NEVER expose WebUI to internet without auth
+# ❌ NEVER expose WebUI to internet
 # Bad:
-./telegram-terminal --web 0.0.0.0:8080
+remote-term --web 0.0.0.0:8080
 
 # ✅ Localhost only (default)
-./telegram-terminal --web 8080
+remote-term --web 8080
 
 # Or use firewall
 ufw deny 8080
@@ -898,7 +898,7 @@ remote-term
 | A02: Cryptographic Failures | ⚠️ PARTIAL | Weak PRNG, plaintext storage |
 | A03: Injection | ✅ N/A | Shell access by design |
 | A04: Insecure Design | ⚠️ PARTIAL | No sandboxing |
-| A05: Security Misconfiguration | ⚠️ PARTIAL | Defaults insecure for WebUI |
+| A05: Security Misconfiguration | ⚠️ PARTIAL | WebUI auth on, but no TLS |
 | A06: Vulnerable Components | ✅ PASS | Dependencies up-to-date |
 | A07: Auth Failures | ⚠️ PARTIAL | Weak approval code |
 | A08: Software/Data Integrity | ✅ PASS | Go mod verify |
@@ -980,6 +980,7 @@ remote-term
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-02-15 | 1.2 | Fix version refs (v2.1→0.1.3), update code examples |
 | 2026-02-15 | 1.1 | Updated for 0.1.x release, binary rename |
 | 2026-02-14 | 1.0 | Initial security documentation |
 
@@ -993,7 +994,7 @@ remote-term
 
 ---
 
-**Document Version:** 1.1
+**Document Version:** 1.2
 **Classification:** Internal Use
 **Last Reviewed:** 2026-02-15
 **Next Review:** 2026-05-15 (quarterly)
