@@ -186,7 +186,24 @@ func NewTelegramBridge(bot *tgbotapi.BotAPI, config *Config) (*TelegramBridge, e
 	}, nil
 }
 
+// registerCommands sets the bot's command menu visible in Telegram.
+func (tb *TelegramBridge) registerCommands() {
+	commands := tgbotapi.NewSetMyCommands(
+		tgbotapi.BotCommand{Command: "start", Description: "Connect to terminal"},
+		tgbotapi.BotCommand{Command: "stop", Description: "End current session"},
+		tgbotapi.BotCommand{Command: "status", Description: "Show session info"},
+		tgbotapi.BotCommand{Command: "restart", Description: "Restart shell session"},
+		tgbotapi.BotCommand{Command: "help", Description: "Show available commands"},
+	)
+	if _, err := tb.bot.Request(commands); err != nil {
+		log.Printf("Warning: failed to register bot commands: %v\n", err)
+	}
+}
+
 func (tb *TelegramBridge) Listen() {
+	// Register command menu in Telegram
+	tb.registerCommands()
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := tb.bot.GetUpdatesChan(u)
@@ -255,7 +272,34 @@ func (tb *TelegramBridge) Listen() {
 			continue
 		}
 
-		// Handle all other commands intelligently
+		// Handle restart - stop current session, next command starts fresh
+		if text == "/restart" {
+			tb.mu.RLock()
+			_, hasSession := tb.sessions[chatID]
+			tb.mu.RUnlock()
+			if hasSession {
+				tb.stopSession(chatID, username)
+			}
+			msg := tgbotapi.NewMessage(chatID, "🔄 Session restarted. Send any command to begin.")
+			tb.bot.Send(msg)
+			continue
+		}
+
+		// Handle help
+		if text == "/help" {
+			msg := tgbotapi.NewMessage(chatID,
+				"📖 Commands:\n\n"+
+					"/stop — End current session\n"+
+					"/restart — Restart shell (fresh cwd)\n"+
+					"/status — Show session info\n"+
+					"/help — This message\n\n"+
+					"All commands run in a persistent shell.\n"+
+					"cd, env vars, etc. persist across messages.")
+			tb.bot.Send(msg)
+			continue
+		}
+
+		// Handle all other commands
 		tb.handleCommand(chatID, username, text)
 	}
 }
